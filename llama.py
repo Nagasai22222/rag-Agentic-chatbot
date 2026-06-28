@@ -492,7 +492,19 @@ def initialize_system():
         "RAG System Ready\n"
     )
 
+# =========================================
+# AUTO INITIALIZE FOR RENDER / GUNICORN
+# =========================================
 
+if QA_CHAIN is None:
+
+    if not os.path.exists(DB_FAISS_PATH):
+
+        print("Vector DB not found")
+
+        create_vector_db()
+
+    initialize_system()
 
 
 
@@ -661,46 +673,17 @@ def reset():
 
 if __name__=="__main__":
 
-
-
-    if not os.path.exists(DB_FAISS_PATH):
-
-
-        print(
-            "Vector DB not found"
-        )
-
-
-        create_vector_db()
-
-
-
-
-
-    initialize_system()
-
-
-
-
     print(
         "Server starting..."
     )
-
-
 
     print(
         "Open:"
     )
 
-
-
     print(
         "http://127.0.0.1:8089"
     )
-
-
-
-
 
     app.run(
 
