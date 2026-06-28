@@ -673,23 +673,23 @@ def reset():
 
 if __name__=="__main__":
 
+    import os
+
     print(
         "Server starting..."
     )
 
-    print(
-        "Open:"
-    )
+    port = int(os.environ.get("PORT", 8089))
 
     print(
-        "http://127.0.0.1:8089"
+        f"Open on port: {port}"
     )
 
     app.run(
 
         host="0.0.0.0",
 
-        port=8089,
+        port=port,
 
         debug=False
 
