@@ -675,9 +675,12 @@ import os
 
 if __name__ == "__main__":
 
-    print("Server starting...")
+    import os
 
     port = int(os.environ.get("PORT", 8089))
+
+    print("Server starting...")
+    print(f"Running on port {port}")
 
     app.run(
         host="0.0.0.0",
