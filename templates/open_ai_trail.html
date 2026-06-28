@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>RAG-AGENTIC TOOL</title>
+<link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&family=Roboto:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+:root {
+  --text-dark: #1f1f24;
+  --input-bg: rgba(255, 255, 255, 0.75);
+  --input-border: rgba(218, 222, 229, 0.6);
+  --border-radius: 30px;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; padding: 0; width: 100%; }
+
+body {
+  font-family: 'Google Sans', 'Roboto', system-ui, sans-serif;
+  color: var(--text-dark);
+  /* The base background handles the smooth color morphing across custom themes */
+  background: linear-gradient(125deg, #f3f8ff, #fbf7ff, #effefa, #fff7f3);
+  background-size: 400% 400%;
+  animation: dynamicThemeMorph 20s ease infinite;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  overflow: hidden;
+}
+
+/* Ambient Palette Morph Engine Loop */
+@keyframes dynamicThemeMorph {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+/* Interactive Overlay Canvas */
+#auroraCanvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+  pointer-events: auto; /* Lets mouse interaction affect particles underneath */
+}
+
+/* Framework Main Panel Frame */
+.app-container {
+  width: 100%;
+  max-width: 880px;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  padding: 40px 20px 24px 20px;
+  position: relative;
+  z-index: 2; /* Ensures typography and elements rest beautifully over the animation */
+}
+
+/* Chat Field Core Pipeline Container */
+.conversation-zone {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+.conversation-zone::-webkit-scrollbar { width: 6px; }
+.conversation-zone::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.08); border-radius: 10px; }
+
+/* Dynamic Vector Welcome Screen */
+.greeting-screen {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  animation: elementFadeIn 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.greeting-screen h1 {
+  font-size: clamp(28px, 5vw, 42px);
+  font-weight: 700;
+  background: linear-gradient(135deg, #1d4ed8, #7c3aed, #ec4899);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  margin: 0;
+  letter-spacing: -0.8px;
+}
+.greeting-screen p {
+  font-size: 16px;
+  color: #52525b;
+  margin-top: 12px;
+}
+
+/* Chat Rows structural mapping */
+.chat-row {
+  display: flex;
+  width: 100%;
+  animation: bubblePopUp 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.chat-row.user { justify-content: flex-end; }
+.chat-row.bot { justify-content: flex-start; }
+
+.chat-bubble {
+  max-width: 80%;
+  padding: 14px 22px;
+  font-size: 16px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.chat-row.user .chat-bubble {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  border-radius: 24px 24px 4px 24px;
+  color: var(--text-dark);
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.03);
+}
+.chat-row.bot .chat-bubble {
+  color: var(--text-dark);
+  border-radius: 24px;
+  background-color: transparent;
+  padding-left: 0;
+}
+
+/* Translucent Action Interface */
+.input-container {
+  position: relative;
+  background: var(--input-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-radius: var(--border-radius);
+  border: 1px solid var(--input-border);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.04);
+  display: flex;
+  align-items: center;
+  padding: 8px 16px 8px 24px;
+  margin-bottom: 24px;
+  transition: all 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.input-container:focus-within {
+  background: #ffffff;
+  border-color: rgba(124, 58, 237, 0.4);
+  box-shadow: 0 14px 50px rgba(124, 58, 237, 0.08);
+}
+
+.input-container textarea {
+  flex: 1;
+  border: none;
+  resize: none;
+  outline: none;
+  font-family: inherit;
+  font-size: 16px;
+  color: var(--text-dark);
+  background: transparent;
+  padding: 12px 0;
+  max-height: 180px;
+  line-height: 24px;
+}
+.input-container textarea::placeholder { color: #71717a; }
+
+.input-right-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-left: 8px;
+}
+
+/* PREMIUM KINETIC BUTTON ANIMATIONS */
+.action-icon-btn {
+  background: rgba(244, 244, 245, 0.9);
+  border: 1px solid rgba(228, 228, 231, 0.4);
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: #3f3f46;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.02);
+  transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.action-icon-btn:hover:not(:disabled) { 
+  background: linear-gradient(135deg, #7c3aed, #ec4899);
+  color: #ffffff;
+  border-color: transparent;
+  transform: translateY(-4px) scale(1.1);
+  box-shadow: 0 8px 20px rgba(124, 58, 237, 0.25);
+}
+.action-icon-btn:active:not(:disabled) { 
+  transform: translateY(1px) scale(0.95); 
+  box-shadow: 0 2px 5px rgba(124, 58, 237, 0.15);
+}
+.action-icon-btn:disabled { color: #a1a1aa; cursor: not-allowed; background: rgba(244, 244, 245, 0.5); }
+
+/* Premium Wide Interactive Space-Clearing Trigger */
+.large-clear-btn {
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid rgba(228, 228, 231, 0.8);
+  color: #27272a;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  padding: 0 20px;
+  height: 44px;
+  border-radius: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.02);
+  transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+  white-space: nowrap;
+}
+.large-clear-btn:hover {
+  background: #ffffff;
+  border-color: rgba(124, 58, 237, 0.3);
+  color: #7c3aed;
+  transform: translateY(-4px) scale(1.04);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.05);
+}
+.large-clear-btn:active { 
+  transform: translateY(1px) scale(0.97); 
+}
+
+/* System Processing Wave Mechanics */
+.typing-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 12px 0;
+}
+.typing-dot {
+  width: 7px;
+  height: 7px;
+  background: linear-gradient(135deg, #7c3aed, #ec4899);
+  border-radius: 50%;
+  animation: processingWave 1.2s infinite ease-in-out;
+}
+.typing-dot:nth-child(2) { animation-delay: 0.15s; }
+.typing-dot:nth-child(3) { animation-delay: 0.3s; }
+
+@keyframes processingWave {
+  0%, 60%, 100% { transform: translateY(0); }
+  30% { transform: translateY(-7px); }
+}
+@keyframes elementFadeIn { from { opacity: 0; transform: scale(0.98); } to { opacity: 1; transform: scale(1); } }
+@keyframes bubblePopUp { from { opacity: 0; transform: translateY(16px) scale(0.95); } to { opacity: 1; transform: translateY(0) scale(1); } }
+</style>
+</head>
+<body>
+
+<canvas id="auroraCanvas"></canvas>
+
+<div class="app-container">
+  <div class="conversation-zone" id="conversationZone">
+    <div class="greeting-screen" id="greetingScreen">
+      <h1>RAG - AGENTIC TOOL</h1>
+      <p>Intelligent, context-aware analysis engine</p>
+    </div>
+  </div>
+
+  <div class="input-container">
+    <textarea id="input" rows="1" placeholder="Ask questions related to Gen AI..."></textarea>
+    
+    <div class="input-right-actions">
+      <button class="large-clear-btn" id="clearBtn" type="button">Clear Space</button>
+      <button class="action-icon-btn" id="sendBtn" type="button" disabled title="Transmit Query">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+      </button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ---------------- Premium Interactive Particle Engine ---------------- */
+const canvas = document.getElementById('auroraCanvas');
+const ctx = canvas.getContext('2d');
+
+let particles = [];
+const particleCount = 30;
+const mouse = { x: null, y: null, radius: 180 };
+
+function resizeCanvas() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+window.addEventListener('mousemove', (e) => {
+  mouse.x = e.clientX;
+  mouse.y = e.clientY;
+});
+window.addEventListener('mouseleave', () => {
+  mouse.x = null;
+  mouse.y = null;
+});
+
+class AuroraParticle {
+  constructor() {
+    this.reset();
+    this.x = Math.random() * canvas.width;
+    this.y = Math.random() * canvas.height;
+  }
+  reset() {
+    this.radius = Math.random() * 100 + 60;
+    this.baseX = Math.random() * canvas.width;
+    this.baseY = Math.random() * canvas.height;
+    this.x = this.baseX;
+    this.y = this.baseY;
+    this.vx = (Math.random() - 0.5) * 0.3;
+    this.vy = (Math.random() - 0.5) * 0.3;
+    // Multi-shade array matches the dynamic gradient background mesh
+    const colors = ['rgba(147, 197, 253, 0.15)', 'rgba(196, 181, 253, 0.15)', 'rgba(167, 243, 208, 0.12)', 'rgba(253, 186, 116, 0.12)'];
+    this.color = colors[Math.floor(Math.random() * colors.length)];
+  }
+  update() {
+    this.x += this.vx;
+    this.y += this.vy;
+
+    // Bounds check boundary reset
+    if (this.x < -this.radius || this.x > canvas.width + this.radius || this.y < -this.radius || this.y > canvas.height + this.radius) {
+      this.reset();
+    }
+
+    // Interactive mouse parallax push mechanics
+    if (mouse.x !== null && mouse.y !== null) {
+      const dx = this.x - mouse.x;
+      const dy = this.y - mouse.y;
+      const distance = Math.hypot(dx, dy);
+      if (distance < mouse.radius) {
+        const force = (mouse.radius - distance) / mouse.radius;
+        this.x += (dx / distance) * force * 4;
+        this.y += (dy / distance) * force * 4;
+      }
+    }
+  }
+  draw() {
+    ctx.beginPath();
+    const gradient = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, this.radius);
+    gradient.addColorStop(0, this.color);
+    gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+    ctx.fillStyle = gradient;
+    ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+// Particle instantiation loop
+for (let i = 0; i < particleCount; i++) {
+  particles.push(new AuroraParticle());
+}
+
+function processRenderFrame() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  particles.forEach(p => {
+    p.update();
+    p.draw();
+  });
+  requestAnimationFrame(processRenderFrame);
+}
+processRenderFrame();
+
+/* ---------------- API Interface Pipeline ---------------- */
+const ASK_ENDPOINT = "http://127.0.0.1:8089/ask";
+const RESET_ENDPOINT = "http://127.0.0.1:8089/reset";
+
+const $ = (s) => document.querySelector(s);
+const uuidv4 = () => ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g,c=>(c^crypto.getRandomValues(new Uint8Array(1))[0]&15>>c/4).toString(16));
+
+let userId = localStorage.getItem("qf_userId") || uuidv4();
+localStorage.setItem("qf_userId", userId);
+
+const conversationZone = $('#conversationZone');
+const greetingScreen = $('#greetingScreen');
+const inputEl = $('#input');
+const sendBtn = $('#sendBtn');
+const clearBtn = $('#clearBtn');
+
+let typingRow = null;
+
+function autoScrollToBottom(){ conversationZone.scrollTo({ top: conversationZone.scrollHeight, behavior: 'smooth' }); }
+
+function createMessageBubble(role, text, isTyping = false) {
+  if (greetingScreen) greetingScreen.style.display = 'none';
+  const row = document.createElement('div'); row.className = `chat-row ${role}`;
+  const bubble = document.createElement('div'); bubble.className = 'chat-bubble';
+  if (isTyping) {
+    bubble.innerHTML = `<div class="typing-indicator"><div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div></div>`;
+  } else {
+    bubble.textContent = text;
+  }
+  row.appendChild(bubble); conversationZone.appendChild(row); autoScrollToBottom(); return row;
+}
+
+async function clearChatSpace(){
+  try {
+    await fetch(RESET_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId }) });
+    conversationZone.querySelectorAll('.chat-row').forEach(row => row.remove());
+    if (greetingScreen) greetingScreen.style.display = 'flex';
+  } catch(e) { alert("Error clearing chat space."); }
+}
+
+async function handleMessageTransmission(){
+  const promptText = inputEl.value.trim(); if (!promptText) return;
+  inputEl.value = ''; inputEl.style.height = 'auto'; sendBtn.disabled = true;
+  createMessageBubble('user', promptText);
+  typingRow = createMessageBubble('bot', '', true);
+  try {
+    const res = await fetch(ASK_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: promptText, userId }) });
+    const data = await res.json();
+    if(typingRow) typingRow.remove();
+    setTimeout(() => createMessageBubble('bot', res.ok ? (data?.result || '').replace(/<br\s*\/?>/gi, '\n') : 'Error parsing response.'), 100);
+  } catch(err) { if(typingRow) typingRow.remove(); createMessageBubble('bot', 'Network connection interrupted.'); }
+}
+
+inputEl.addEventListener('input', () => {
+  sendBtn.disabled = !inputEl.value.trim();
+  inputEl.style.height = 'auto'; inputEl.style.height = Math.min(inputEl.scrollHeight, 180) + 'px';
+});
+inputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleMessageTransmission(); } });
+sendBtn.addEventListener('click', handleMessageTransmission);
+clearBtn.addEventListener('click', clearChatSpace);
+</script>
+</body>
+</html>
