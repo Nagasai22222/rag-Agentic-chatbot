@@ -671,26 +671,16 @@ def reset():
 # MAIN
 # ================================
 
-if __name__=="__main__":
+import os
 
-    import os
+if __name__ == "__main__":
 
-    print(
-        "Server starting..."
-    )
+    print("Server starting...")
 
     port = int(os.environ.get("PORT", 8089))
 
-    print(
-        f"Open on port: {port}"
-    )
-
     app.run(
-
         host="0.0.0.0",
-
         port=port,
-
         debug=False
-
     )
