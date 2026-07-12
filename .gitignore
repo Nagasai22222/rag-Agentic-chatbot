@@ -1,4 +1,4 @@
-# Python
+﻿# Python
 __pycache__/
 *.py[cod]
 *.pyo
@@ -29,8 +29,10 @@ Thumbs.db
 .pytest_cache/
 .mypy_cache/
 
-# FAISS Vector Database
-vectorstore/
+# NOTE: vectorstore/db_faiss/ is intentionally NOT ignored.
+# The FAISS index must be committed to Git so Render has it after git clone.
+# Raw PDF source files are excluded (they can be large).
+data/*.pdf
 
 # Temporary files
 *.tmp

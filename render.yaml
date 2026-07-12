@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: rag-agentic-chatbot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn llama:app --workers 1 --timeout 300 --bind 0.0.0.0:$PORT
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false   # Set this manually in the Render dashboard
+      - key: PYTHON_VERSION
+        value: "3.10"

@@ -1,36 +1,18 @@
 import os
 import time
+import threading
 import warnings
 
 from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
 
-from langchain_community.document_loaders import (
-    PyPDFLoader,
-    DirectoryLoader,
-)
-
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import FAISS
-
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_groq import ChatGroq
-
-from langchain_core.prompts import PromptTemplate
-from langchain_core.output_parsers import StrOutputParser
-
-from langchain_core.runnables import (
-    RunnableParallel,
-    RunnablePassthrough,
-)
-
+# ================================
+# ENVIRONMENT
+# ================================
 
 warnings.filterwarnings("ignore")
 load_dotenv()
-
-if not os.getenv("GROQ_API_KEY"):
-    raise ValueError("GROQ_API_KEY not found in .env")
 
 # ================================
 # PATHS
@@ -39,18 +21,14 @@ if not os.getenv("GROQ_API_KEY"):
 DATA_PATH = "data"
 DB_FAISS_PATH = "vectorstore/db_faiss"
 
-
-
 # ================================
-# FLASK
+# FLASK APP
 # ================================
+# Flask app is created immediately so Gunicorn can bind to the port
+# right away — before any heavy ML models are loaded.
 
 app = Flask(__name__)
 CORS(app)
-
-
-
-
 
 # ================================
 # FINAL RAG PROMPT
@@ -89,30 +67,21 @@ Answer:
 """
 
 
-
 def set_custom_prompt():
+    from langchain_core.prompts import PromptTemplate
 
     return PromptTemplate(
-
         template=custom_prompt_template,
-
-        input_variables=[
-            "context",
-            "question"
-        ]
-
+        input_variables=["context", "question"]
     )
 
 
-
-
-
-
 # ================================
-# LLM
+# LLM  (imported lazily)
 # ================================
 
 def load_llm():
+    from langchain_groq import ChatGroq
 
     print("Loading Groq LLM...")
 
@@ -123,407 +92,145 @@ def load_llm():
     )
 
 
-
-
-
-
-
-
 # ================================
-# EMBEDDINGS
+# EMBEDDINGS  (imported lazily)
 # ================================
 
 def get_embedder():
+    from langchain_huggingface import HuggingFaceEmbeddings
 
+    print("Loading HuggingFace embeddings...")
 
     return HuggingFaceEmbeddings(
-
         model_name="sentence-transformers/all-MiniLM-L6-v2"
-
     )
-
-
-
-
-
 
 
 # ================================
-# CREATE VECTOR DATABASE
-# ================================
-
-def create_vector_db():
-
-
-    print("\n========== BUILDING VECTOR DATABASE ==========")
-
-
-
-    loader = DirectoryLoader(
-
-        DATA_PATH,
-
-        glob="*.pdf",
-
-        loader_cls=PyPDFLoader
-
-    )
-
-
-
-    documents = loader.load()
-
-
-
-    print(
-        f"Loaded {len(documents)} pages from PDFs"
-    )
-
-
-
-
-    splitter = RecursiveCharacterTextSplitter(
-
-        chunk_size=1000,
-
-        chunk_overlap=150
-
-    )
-
-
-
-    chunks = splitter.split_documents(documents)
-
-
-
-
-    print(
-        f"Created {len(chunks)} chunks"
-    )
-
-
-
-
-    embeddings = get_embedder()
-
-
-
-
-    db = FAISS.from_documents(
-
-        chunks,
-
-        embeddings
-
-    )
-
-
-
-    os.makedirs(
-
-        os.path.dirname(DB_FAISS_PATH),
-
-        exist_ok=True
-
-    )
-
-
-
-
-    db.save_local(DB_FAISS_PATH)
-
-
-
-
-    print(
-        "FAISS database saved successfully"
-    )
-
-    print(
-        "=============================================\n"
-    )
-
-
-
-
-
-
-
-
-# ================================
-# BUILD RAG
+# BUILD RAG CHAIN
 # ================================
 
 def build_rag_chain(llm, prompt, db):
+    from langchain_core.output_parsers import StrOutputParser
+    from langchain_core.runnables import RunnableParallel, RunnablePassthrough
 
-
-
-    retriever = db.as_retriever(
-
-        search_kwargs={
-            "k":5
-        }
-
-    )
-
-
-
+    retriever = db.as_retriever(search_kwargs={"k": 5})
 
     def format_docs(docs):
-
-
-        print(
-            "\n===== RETRIEVED DOCUMENTS ====="
-        )
-
-
+        print("\n===== RETRIEVED DOCUMENTS =====")
 
         if not docs:
-
             return "No context found"
 
+        for i, doc in enumerate(docs, 1):
+            print(f"\nDocument {i}")
+            print(doc.page_content[:500])
 
+        print("\n===============================")
 
-
-        for i,doc in enumerate(docs,1):
-
-
-            print(
-                f"\nDocument {i}"
-            )
-
-
-            print(
-                doc.page_content[:500]
-            )
-
-
-
-
-        print(
-            "\n==============================="
-        )
-
-
-
-
-        return "\n\n".join(
-
-            doc.page_content
-
-            for doc in docs
-
-        )
-
-
-
-
-
-
+        return "\n\n".join(doc.page_content for doc in docs)
 
     rag_chain = (
-
-
         RunnableParallel(
-
             {
-
-                "context":
-                retriever | format_docs,
-
-
-                "question":
-                RunnablePassthrough()
-
+                "context": retriever | format_docs,
+                "question": RunnablePassthrough(),
             }
-
         )
-
-
-        |
-
-
-        prompt
-
-
-        |
-
-
-        llm
-
-
-        |
-
-
-        StrOutputParser()
-
-
+        | prompt
+        | llm
+        | StrOutputParser()
     )
-
-
 
     return rag_chain
 
 
-
-
-
-
-
 # ================================
-# QA SYSTEM
+# QA SYSTEM  (loads FAISS index)
 # ================================
 
 def qa_bot():
+    """
+    Loads the FAISS index from disk and builds the RAG chain.
 
+    Returns (chain, error_message):
+      - (chain, None) on success
+      - (None, str)   if FAISS index is missing
+    """
+    from langchain_community.vectorstores import FAISS
+
+    if not os.path.exists(DB_FAISS_PATH):
+        msg = (
+            "FAISS vector database not found at '{}'. "
+            "Please run create_vector_db.py locally, then commit the "
+            "'vectorstore/db_faiss/' folder to your repository before "
+            "deploying to Render.".format(DB_FAISS_PATH)
+        )
+        print("[ERROR] " + msg)
+        return None, msg
 
     embeddings = get_embedder()
 
+    print("Loading existing FAISS database...")
 
+    db = FAISS.load_local(
+        DB_FAISS_PATH,
+        embeddings,
+        allow_dangerous_deserialization=True,
+    )
 
-
-    if os.path.exists(DB_FAISS_PATH):
-
-
-
-        print(
-            "Loading existing FAISS database..."
-        )
-
-
-
-        db = FAISS.load_local(
-
-            DB_FAISS_PATH,
-
-            embeddings,
-
-            allow_dangerous_deserialization=True
-
-        )
-
-
-
-        print(
-            "FAISS loaded successfully"
-        )
-
-
-
-
-    else:
-
-
-
-        create_vector_db()
-
-
-
-        db = FAISS.load_local(
-
-            DB_FAISS_PATH,
-
-            embeddings,
-
-            allow_dangerous_deserialization=True
-
-        )
-
-
-
-
-
-
+    print("FAISS loaded successfully")
 
     llm = load_llm()
-
-
-
     prompt = set_custom_prompt()
 
-
-
-
-    return build_rag_chain(
-
-        llm,
-
-        prompt,
-
-        db
-
-    )
-
-
-
-
-
-
-
+    return build_rag_chain(llm, prompt, db), None
 
 
 # ================================
-# INITIALIZE
+# LAZY INITIALIZATION
 # ================================
+# QA_CHAIN is None until the first /ask request arrives.
+# A threading.Lock prevents race conditions when Gunicorn uses
+# multiple threads (even with --workers 1).
 
 QA_CHAIN = None
+_INIT_ERROR = None
+_rag_lock = threading.Lock()
 
 
+def get_rag_chain():
+    """
+    Returns (chain, error_message).
 
+    The chain is built on the first call and cached for all subsequent
+    requests so the heavy work only happens once per worker.
+    """
+    global QA_CHAIN, _INIT_ERROR
 
-def initialize_system():
+    # Fast path — already initialised (or already failed)
+    if QA_CHAIN is not None or _INIT_ERROR is not None:
+        return QA_CHAIN, _INIT_ERROR
 
+    with _rag_lock:
+        # Double-checked locking: re-check inside the lock
+        if QA_CHAIN is not None or _INIT_ERROR is not None:
+            return QA_CHAIN, _INIT_ERROR
 
-    global QA_CHAIN
+        print("\nInitializing RAG System (lazy, first request)...")
 
+        try:
+            chain, error = qa_bot()
+            if error:
+                _INIT_ERROR = error
+            else:
+                QA_CHAIN = chain
+                print("RAG System Ready\n")
+        except Exception as exc:
+            _INIT_ERROR = f"RAG system failed to initialise: {exc}"
+            print(f"[ERROR] {_INIT_ERROR}")
 
-
-    print(
-        "\nInitializing RAG System..."
-    )
-
-
-
-    QA_CHAIN = qa_bot()
-
-
-
-    print(
-        "RAG System Ready\n"
-    )
-
-# =========================================
-# AUTO INITIALIZE FOR RENDER / GUNICORN
-# =========================================
-
-if QA_CHAIN is None:
-
-    if not os.path.exists(DB_FAISS_PATH):
-
-        print("Vector DB not found")
-
-        create_vector_db()
-
-    initialize_system()
-
-
-
-
-
-
-# ================================
-# ASK
-# ================================
-
-def final_result(query):
-
-
-    return QA_CHAIN.invoke(query)
-
-
-
-
-
+    return QA_CHAIN, _INIT_ERROR
 
 
 # ================================
@@ -532,151 +239,58 @@ def final_result(query):
 
 @app.route("/")
 def index():
-
-
-    return render_template(
-        "open_ai_trail.html"
-    )
-
-
-
-
-
+    return render_template("open_ai_trail.html")
 
 
 @app.route("/ask", methods=["POST"])
 def ask():
-
-
-
-    data=request.get_json()
-
-
+    data = request.get_json()
 
     if not data:
+        return jsonify({"error": "No JSON received"}), 400
 
-        return jsonify(
-            {
-                "error":"No JSON received"
-            }
-        ),400
-
-
-
-
-    query=data.get("query")
-
-
+    query = data.get("query")
 
     if not query:
+        return jsonify({"error": "Query required"}), 400
 
+    chain, error = get_rag_chain()
 
-        return jsonify(
-            {
-                "error":"Query required"
-            }
-        ),400
+    if error:
+        return jsonify({"error": error}), 503
 
+    start = time.time()
 
+    answer = chain.invoke(query)
 
+    end = time.time()
 
+    response_time = round(end - start, 2)
 
-    start=time.time()
-
-
-
-    answer=final_result(query)
-
-
-
-    end=time.time()
-
-
-
-
-    response_time=round(
-
-        end-start,
-
-        2
-
-    )
-
-
-
-
-    result=(
-
-        f"Response Time: {response_time} sec\n\n"
-
-        +
-
-        answer
-
-    )
-
-
-
+    result = f"Response Time: {response_time} sec\n\n" + answer
 
     return jsonify(
-
         {
-
-            "result":
-
-            result.replace(
-
-                "\n",
-
-                "<br>"
-
-            )
-
+            "result": result.replace("\n", "<br>")
         }
-
     )
 
 
-
-
-
-
-
-
-@app.route("/reset",methods=["POST"])
+@app.route("/reset", methods=["POST"])
 def reset():
-
-
     return jsonify(
-
         {
-
-            "status":"success",
-
-            "message":"Chat cleared"
-
+            "status": "success",
+            "message": "Chat cleared",
         }
-
     )
-
-
-
-
-
-
-
 
 
 # ================================
 # MAIN
 # ================================
 
-import os
-
 if __name__ == "__main__":
-
-    import os
-
     port = int(os.environ.get("PORT", 8089))
 
     print("Server starting...")
@@ -685,5 +299,5 @@ if __name__ == "__main__":
     app.run(
         host="0.0.0.0",
         port=port,
-        debug=False
+        debug=False,
     )
