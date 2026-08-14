@@ -1,4 +1,4 @@
-﻿# Python
+# Python
 __pycache__/
 *.py[cod]
 *.pyo
@@ -14,6 +14,7 @@ venv/
 
 # VS Code
 .vscode/
+*.code-workspace
 
 # PyCharm
 .idea/
@@ -24,6 +25,8 @@ Thumbs.db
 
 # Logs
 *.log
+output.txt
+stderr.txt
 
 # Python cache
 .pytest_cache/
