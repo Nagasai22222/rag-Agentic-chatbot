@@ -5,6 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>RAG-AGENTIC TOOL</title>
 <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&family=Roboto:wght@400;500&display=swap" rel="stylesheet" />
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.6/purify.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github-dark.min.css">
 <style>
 :root {
   --text-dark: #1f1f24;
@@ -87,6 +91,7 @@ body {
   font-weight: 700;
   background: linear-gradient(135deg, #1d4ed8, #7c3aed, #ec4899);
   -webkit-background-clip: text;
+  background-clip: text;
   -webkit-text-fill-color: transparent;
   margin: 0;
   letter-spacing: -0.8px;
@@ -187,15 +192,15 @@ body {
   box-shadow: 0 2px 6px rgba(0,0,0,0.02);
   transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
-.action-icon-btn:hover:not(:disabled) { 
+.action-icon-btn:hover:not(:disabled) {
   background: linear-gradient(135deg, #7c3aed, #ec4899);
   color: #ffffff;
   border-color: transparent;
   transform: translateY(-4px) scale(1.1);
   box-shadow: 0 8px 20px rgba(124, 58, 237, 0.25);
 }
-.action-icon-btn:active:not(:disabled) { 
-  transform: translateY(1px) scale(0.95); 
+.action-icon-btn:active:not(:disabled) {
+  transform: translateY(1px) scale(0.95);
   box-shadow: 0 2px 5px rgba(124, 58, 237, 0.15);
 }
 .action-icon-btn:disabled { color: #a1a1aa; cursor: not-allowed; background: rgba(244, 244, 245, 0.5); }
@@ -226,8 +231,8 @@ body {
   transform: translateY(-4px) scale(1.04);
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.05);
 }
-.large-clear-btn:active { 
-  transform: translateY(1px) scale(0.97); 
+.large-clear-btn:active {
+  transform: translateY(1px) scale(0.97);
 }
 
 /* System Processing Wave Mechanics */
@@ -385,6 +390,21 @@ body {
 }
 @keyframes elementFadeIn { from { opacity: 0; transform: scale(0.98); } to { opacity: 1; transform: scale(1); } }
 @keyframes bubblePopUp { from { opacity: 0; transform: translateY(16px) scale(0.95); } to { opacity: 1; transform: translateY(0) scale(1); } }
+
+/* Phase 6 Markdown Prose */
+.prose { font-family: inherit; line-height: 1.6; color: #3f3f46; word-break: break-word; font-size: 14.5px; }
+.prose p { margin-top: 0; margin-bottom: 12px; }
+.prose p:last-child { margin-bottom: 0; }
+.prose h1, .prose h2, .prose h3, .prose h4 { margin-top: 16px; margin-bottom: 8px; color: #1d4ed8; font-weight: 600; }
+.prose ul, .prose ol { margin-top: 0; margin-bottom: 12px; padding-left: 24px; }
+.prose li { margin-bottom: 4px; }
+.prose table { width: 100%; border-collapse: collapse; margin-top: 12px; margin-bottom: 12px; font-size: 14px; display: block; overflow-x: auto; }
+.prose th, .prose td { border: 1px solid rgba(228, 228, 231, 0.8); padding: 8px 12px; text-align: left; }
+.prose th { background: rgba(124, 58, 237, 0.05); font-weight: 600; color: #7c3aed; padding-top: 10px; padding-bottom: 10px; }
+.prose blockquote { border-left: 4px solid rgba(124, 58, 237, 0.4); margin: 0 0 12px 0; padding: 4px 12px; color: #52525b; background: rgba(124, 58, 237, 0.02); }
+.prose code { background: rgba(228, 228, 231, 0.6); padding: 2px 4px; border-radius: 4px; font-family: monospace; font-size: 13.5px; color: #c026d3; }
+.prose pre { background: #1e1e2e; padding: 12px; border-radius: 8px; overflow-x: auto; margin-bottom: 12px; }
+.prose pre code { background: transparent; padding: 0; color: #cdd6f4; font-size: 13.5px; border-radius: 0; }
 </style>
 </head>
 <body>
@@ -401,7 +421,7 @@ body {
 
   <div class="input-container">
     <textarea id="input" rows="1" placeholder="Ask questions related to Gen AI..."></textarea>
-    
+
     <div class="input-right-actions">
       <button class="large-clear-btn" id="clearBtn" type="button">+ New Chat</button>
       <button class="action-icon-btn" id="sendBtn" type="button" disabled title="Transmit Query">
@@ -537,23 +557,23 @@ function createMessageBubble(role, text, isTyping = false) {
 function createProcessingBubble() {
   if (greetingScreen) greetingScreen.style.display = 'none';
   const row = document.createElement('div'); row.className = `chat-row bot`;
-  
-  const panel = document.createElement('div'); 
+
+  const panel = document.createElement('div');
   panel.className = 'processing-panel';
-  
+
   const spinner = document.createElement('div');
   spinner.className = 'spinner-icon';
-  
+
   const text = document.createElement('div');
   text.className = 'processing-text';
   text.textContent = 'Understanding your question...';
-  
+
   panel.appendChild(spinner);
   panel.appendChild(text);
   row.appendChild(panel);
-  conversationZone.appendChild(row); 
-  autoScrollToBottom(); 
-  
+  conversationZone.appendChild(row);
+  autoScrollToBottom();
+
   const stages = [
     "Understanding your question...",
     "Searching the knowledge base...",
@@ -562,7 +582,7 @@ function createProcessingBubble() {
     "Generating grounded answer..."
   ];
   let currentStageIndex = 0;
-  
+
   processingInterval = setInterval(() => {
     currentStageIndex = (currentStageIndex + 1) % stages.length;
     text.style.opacity = 0;
@@ -571,52 +591,76 @@ function createProcessingBubble() {
       text.style.opacity = 1;
     }, 150);
   }, 1500);
-  
+
   return row;
 }
 
 function renderBotResponse(data, clientTime) {
   const row = document.createElement('div'); row.className = `chat-row bot`;
   const bubble = document.createElement('div'); bubble.className = 'chat-bubble';
-  
+
   const textDiv = document.createElement('div');
   let rawText = data.result || '';
-  rawText = rawText.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  
-  // Safe Regex replacing citations:
-  rawText = rawText.replace(/\[Source\s+\d+(?:[,\xA0\s]*Page\s+[^\]]+)?\]/gi, (match) => {
+  let finalHtml = rawText;
+
+  try {
+      if (typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined') {
+          // Parse Markdown
+          let parsed = marked.parse(rawText);
+          // Sanitize HTML
+          parsed = DOMPurify.sanitize(parsed);
+          finalHtml = parsed;
+      } else {
+          // Fallback if CDN fails
+          finalHtml = rawText.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      }
+  } catch (e) {
+      console.error("Markdown parsing failed", e);
+      finalHtml = rawText.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  // Safe Regex replacing citations (must happen after marked because marked does not encapsulate [Source X] across structural barriers natively except as text)
+  finalHtml = finalHtml.replace(/\[Source\s+\d+(?:[,\xA0\s]*Page\s+[^\]]+)?\]/gi, (match) => {
     return `<span class="citation-badge">${match}</span>`;
   });
-  textDiv.innerHTML = rawText;
-  
+
+  textDiv.innerHTML = `<div class="prose">${finalHtml}</div>`;
+
+  // Apply highlight.js dynamically if needed
+  if (typeof hljs !== 'undefined') {
+      textDiv.querySelectorAll('pre code').forEach((block) => {
+          hljs.highlightElement(block);
+      });
+  }
+
   bubble.appendChild(textDiv);
 
   // Expandable view evidence section
   if (data?.sources && data.sources.length > 0) {
       const evidenceDetails = document.createElement('details');
       evidenceDetails.className = 'evidence-container';
-      
+
       const summary = document.createElement('summary');
       summary.textContent = 'View Evidence';
       evidenceDetails.appendChild(summary);
-      
+
       const evidenceWrapper = document.createElement('div');
       evidenceWrapper.style.marginTop = '8px';
-      
+
       data.sources.forEach(chunk => {
           let chunkStr = chunk.chunk_text ? chunk.chunk_text : "No text available.";
           chunkStr = chunkStr.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-          
+
           const block = document.createElement('div');
           block.className = 'evidence-block';
-          
+
           const header = document.createElement('div');
           header.className = 'evidence-header';
           header.textContent = `Source ${chunk.chunk} - ${chunk.source} (Page ${chunk.page})`;
-          
+
           const txt = document.createElement('div');
           txt.innerHTML = chunkStr;
-          
+
           block.appendChild(header);
           block.appendChild(txt);
           evidenceWrapper.appendChild(block);
@@ -624,10 +668,10 @@ function renderBotResponse(data, clientTime) {
       evidenceDetails.appendChild(evidenceWrapper);
       bubble.appendChild(evidenceDetails);
   }
-  
+
   if (data?.sources) {
     const isGrounded = data?.grounded !== false;
-    const statusHtml = isGrounded 
+    const statusHtml = isGrounded
         ? `<div class="status-grounded">
              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
              ✓ Grounded in Knowledge Base
@@ -636,23 +680,23 @@ function renderBotResponse(data, clientTime) {
              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
              ⚠ Limited Knowledge Base Support
            </div>`;
-           
+
     const retrievedChunks = data.retrieved_chunks || 0;
     const uniqueDocs = data.unique_documents || 0;
     const backendTime = (data.response_time || 0).toFixed(3);
     const retTime = data.retrieval_time ? data.retrieval_time.toFixed(3) : "0.000";
     const genTime = data.generation_time ? data.generation_time.toFixed(3) : "0.000";
-    
+
     let sourcesHtml = '';
     if (data.citation_sources && data.citation_sources.length > 0) {
         sourcesHtml = `<div class="source-list">
         <div style="font-weight: 600; margin-bottom: 2px;">Sources</div>`;
-        
+
         data.citation_sources.forEach(src => {
            const pages = src.pages.join(", ");
            const chunks = src.chunks.join(", ");
            const bestScore = src.scores && src.scores.length > 0 ? Math.min(...src.scores).toFixed(4) : "N/A";
-           
+
            sourcesHtml += `<div class="source-item">
              <div class="source-title">📄 ${src.source}</div>
              <div class="source-meta">Pages: ${pages} · Chunks: ${chunks}</div>
@@ -661,7 +705,7 @@ function renderBotResponse(data, clientTime) {
         });
         sourcesHtml += `</div>`;
     }
-    
+
     const insightsDiv = document.createElement('div');
     insightsDiv.className = 'rag-insights';
     insightsDiv.innerHTML = `
@@ -673,12 +717,12 @@ function renderBotResponse(data, clientTime) {
         <div style="margin-bottom:5px; font-family: monospace; font-size:12px;">⏱️ Backend: ${backendTime}s | ⚡ Total Client: ${clientTime}s</div>
         ${sourcesHtml}
     `;
-    
+
     bubble.appendChild(insightsDiv);
   }
-  
-  row.appendChild(bubble); 
-  conversationZone.appendChild(row); 
+
+  row.appendChild(bubble);
+  conversationZone.appendChild(row);
   autoScrollToBottom();
 }
 
@@ -689,45 +733,45 @@ async function clearChatSpace(){
     // Rotate Session Key to enforce true backend Conversation bounds mapping
     userId = uuidv4();
     localStorage.setItem("qf_userId", userId);
-    
+
     if (greetingScreen) greetingScreen.style.display = 'flex';
   } catch(e) { alert("Error clearing chat space."); }
 }
 
 async function handleMessageTransmission(){
   const promptText = inputEl.value.trim(); if (!promptText) return;
-  
+
   inputEl.value = ''; inputEl.style.height = 'auto'; sendBtn.disabled = true;
   createMessageBubble('user', promptText);
-  
+
   typingRow = createProcessingBubble();
   const startTime = performance.now();
-  
+
   try {
     const res = await fetch(ASK_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: promptText, userId }) });
     const data = await res.json();
-    
+
     if(processingInterval) clearInterval(processingInterval);
     if(typingRow) typingRow.remove();
-    
+
     const clientEnd = performance.now();
     const clientTime = ((clientEnd - startTime) / 1000).toFixed(3);
-    
+
     if (!res.ok) {
        createMessageBubble('bot', data?.error || 'Sorry, I couldn\'t process that request. Please try again.');
        return;
     }
-    
+
     // Check if it's the old response format or new format
     if (data.result !== undefined && data.sources !== undefined) {
         renderBotResponse(data, clientTime);
     } else {
         createMessageBubble('bot', data.result || 'Error parsing response.');
     }
-  } catch(err) { 
+  } catch(err) {
     if(processingInterval) clearInterval(processingInterval);
-    if(typingRow) typingRow.remove(); 
-    createMessageBubble('bot', 'Network connection interrupted. Please try again.'); 
+    if(typingRow) typingRow.remove();
+    createMessageBubble('bot', 'Network connection interrupted. Please try again.');
   } finally {
     sendBtn.disabled = false;
   }
