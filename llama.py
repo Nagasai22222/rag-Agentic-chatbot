@@ -67,6 +67,12 @@ def resolve_conversational_query(query, history):
 warnings.filterwarnings("ignore")
 load_dotenv()
 
+# --- Configuration & Credentials ---
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+RETRIEVAL_K = 15
+MAX_CONTEXT_CHUNKS = 5
+RELEVANCE_THRESHOLD = float(os.getenv("RELEVANCE_THRESHOLD", "1.50"))
+
 # ================================
 # PATHS
 # ================================
@@ -272,8 +278,17 @@ def ask():
         
         # Retrieval Stage
         retrieval_start = time.perf_counter()
-        docs_and_scores = components["db"].similarity_search_with_score(resolved_query, k=int(os.getenv("RETRIEVAL_K", "8")))
+        docs_and_scores = components["db"].similarity_search_with_score(resolved_query, k=int(os.getenv("RETRIEVAL_K", "15")))
         retrieval_time = time.perf_counter() - retrieval_start
+        
+        relevance_threshold = float(os.getenv("RELEVANCE_THRESHOLD", "1.50"))
+        diversity_penalty = float(os.getenv("DIVERSITY_PENALTY", "0.15"))
+        max_context_chunks = int(os.getenv("MAX_CONTEXT_CHUNKS", "5"))
+        
+        pool = []
+        for doc, score in docs_and_scores:
+            if score <= relevance_threshold:
+                pool.append({"doc": doc, "initial_score": score, "current_score": score})
         
         sources_list = []
         unique_docs_set = set()
@@ -281,14 +296,11 @@ def ask():
         citation_sources_map = {}
         fallback_sentence = "I couldn't find enough information in the provided documents to answer this question reliably."
         
-        relevance_threshold = float(os.getenv("RELEVANCE_THRESHOLD", "1.50"))
-        
-        for i, (doc, score) in enumerate(docs_and_scores):
-            if score > relevance_threshold:
-                continue
-            if len(sources_list) >= int(os.getenv("MAX_CONTEXT_CHUNKS", "5")):
-                break
-                
+        while pool and len(sources_list) < max_context_chunks:
+            pool.sort(key=lambda x: x["current_score"])
+            best = pool.pop(0)
+            doc, score = best["doc"], best["initial_score"]
+            
             meta = doc.metadata or {}
             source_file = os.path.basename(str(meta.get("source", "Unknown source")))
             page_num = meta.get("page", "Unknown")
@@ -305,6 +317,12 @@ def ask():
             citation_sources_map[source_file]["scores"].append(round(float(score), 4))
             
             context_parts.append(f"[Source {chunk_num}]\nDocument: {source_file}\nPage: {page_num}\nChunk: {chunk_num}\n\n{doc.page_content}")
+            
+            # Apply penalty to remaining candidates of the same document
+            for item in pool:
+                item_source = os.path.basename(str(item["doc"].metadata.get("source", "")))
+                if item_source == source_file:
+                    item["current_score"] += diversity_penalty
             
         citation_sources = list(citation_sources_map.values())
         
