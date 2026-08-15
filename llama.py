@@ -80,6 +80,75 @@ RELEVANCE_THRESHOLD = float(os.getenv("RELEVANCE_THRESHOLD", "1.50"))
 DATA_PATH = "data"
 DB_FAISS_PATH = "vectorstore/db_faiss"
 
+import numpy as np
+
+# ================================
+# PHASE 10 SEMANTIC CACHE
+# ================================
+MAX_CACHE_ENTRIES = 100
+CACHE_TTL_SECONDS = 3600
+CACHE_SIMILARITY_THRESHOLD = 0.95
+
+GLOBAL_SEMANTIC_CACHE = {}
+
+def get_kb_version():
+    try:
+        return os.path.getmtime(os.path.join(DB_FAISS_PATH, "index.faiss"))
+    except:
+        return 0
+
+def cosine_similarity(v1, v2):
+    dot = np.dot(v1, v2)
+    n1 = np.linalg.norm(v1)
+    n2 = np.linalg.norm(v2)
+    return dot / (n1 * n2) if n1 and n2 else 0
+
+def check_cache(resolved_query, embedder):
+    kb_ver = get_kb_version()
+    now = time.time()
+    
+    keys_to_delete = [k for k, v in GLOBAL_SEMANTIC_CACHE.items() 
+                      if now - v["timestamp"] > CACHE_TTL_SECONDS or v["kb_version"] != kb_ver]
+    for k in keys_to_delete:
+        del GLOBAL_SEMANTIC_CACHE[k]
+        
+    if not GLOBAL_SEMANTIC_CACHE:
+        return None
+        
+    query_emb = np.array(embedder.embed_query(resolved_query))
+    best_k = None
+    best_sim = -1
+    
+    for k, v in GLOBAL_SEMANTIC_CACHE.items():
+        sim = cosine_similarity(query_emb, v["embedding"])
+        if sim > best_sim:
+            best_sim = sim
+            best_k = k
+            
+    if best_sim >= CACHE_SIMILARITY_THRESHOLD and best_k is not None:
+        entry = GLOBAL_SEMANTIC_CACHE.pop(best_k)
+        GLOBAL_SEMANTIC_CACHE[best_k] = entry
+        payload = entry["payload"].copy() # avoid pointer mutating
+        return payload
+        
+    return None
+
+def save_to_cache(resolved_query, payload, embedder):
+    if not payload.get("grounded") or "error" in payload:
+        return
+        
+    if len(GLOBAL_SEMANTIC_CACHE) >= MAX_CACHE_ENTRIES:
+        oldest_k = next(iter(GLOBAL_SEMANTIC_CACHE))
+        del GLOBAL_SEMANTIC_CACHE[oldest_k]
+        
+    query_emb = np.array(embedder.embed_query(resolved_query))
+    GLOBAL_SEMANTIC_CACHE[resolved_query] = {
+        "embedding": query_emb,
+        "payload": payload,
+        "timestamp": time.time(),
+        "kb_version": get_kb_version()
+    }
+
 # ================================
 # FLASK APP
 # ================================
@@ -162,33 +231,37 @@ def get_embedder():
 
 def qa_bot():
     from langchain_community.vectorstores import FAISS
+    from langchain_groq import ChatGroq
 
-    if not os.path.exists(DB_FAISS_PATH):
-        msg = (
-            "FAISS vector database not found at '{}'. "
-            "Please run create_vector_db.py locally, then commit the "
-            "'vectorstore/db_faiss/' folder to your repository before "
-            "deploying to Render.".format(DB_FAISS_PATH)
+    try:
+        if not os.path.exists(DB_FAISS_PATH):
+            return None, "Vector database not found. Please ingest documents first."
+            
+        embeddings = get_embedder()
+        print("Loading existing FAISS database...")
+        db = FAISS.load_local(DB_FAISS_PATH, embeddings, allow_dangerous_deserialization=True)
+        print("FAISS loaded successfully")
+        
+        print("Loading Groq LLM...")
+        llm = ChatGroq(
+            model="llama-3.3-70b-versatile",
+            temperature=0,
+            max_tokens=None,
+            timeout=None,
+            max_retries=2,
+            api_key=os.environ.get("GROQ_API_KEY")
         )
-        print("[ERROR] " + msg)
-        return None, msg
 
-    embeddings = get_embedder()
+        qa_prompt = set_custom_prompt()
 
-    print("Loading existing FAISS database...")
-
-    db = FAISS.load_local(
-        DB_FAISS_PATH,
-        embeddings,
-        allow_dangerous_deserialization=True,
-    )
-
-    print("FAISS loaded successfully")
-
-    llm = load_llm()
-    prompt = set_custom_prompt()
-
-    return {"db": db, "llm": llm, "prompt": prompt}, None
+        return {
+            "db": db, 
+            "llm": llm, 
+            "prompt": qa_prompt,
+            "embeddings": embeddings
+        }, None
+    except Exception as e:
+        return None, str(e)
 
 
 # ================================
@@ -279,6 +352,25 @@ def ask():
     try:
         print(f"\n[QUERY] {resolved_query}")
         
+        # PHASE 10 CACHE LOOKUP
+        cache_start = time.perf_counter()
+        cached_payload = check_cache(resolved_query, components["embeddings"])
+        cache_lookup_time = time.perf_counter() - cache_start
+        
+        if cached_payload is not None:
+            print("[CACHE] HIT! Bypassing Langchain/Groq architecture.")
+            response_time = time.perf_counter() - start_time
+            cached_payload["response_time"] = round(response_time, 3)
+            cached_payload["cache_hit"] = True
+            cached_payload["cache_lookup_time"] = round(cache_lookup_time, 3)
+            
+            add_to_session(user_id, "user", query)
+            add_to_session(user_id, "assistant", cached_payload["result"])
+            
+            return jsonify(cached_payload)
+            
+        print("[CACHE] MISS.")
+        
         # Retrieval Stage
         retrieval_start = time.perf_counter()
         docs_and_scores = components["db"].similarity_search_with_score(resolved_query, k=int(os.getenv("RETRIEVAL_K", "15")))
@@ -364,7 +456,7 @@ def ask():
             
         response_time = time.perf_counter() - start_time
         
-        return jsonify({
+        final_payload = {
             "result": answer,
             "sources": sources_list,
             "citation_sources": citation_sources,
@@ -379,8 +471,15 @@ def ask():
             "resolved_query": resolved_query,
             "history_used": history_used,
             "history_char_count": len(history_text),
-            "generation_history_turns": len(gen_history) // 2
-        })
+            "generation_history_turns": len(gen_history) // 2,
+            "cache_hit": False,
+            "cache_lookup_time": round(cache_lookup_time, 3)
+        }
+        
+        # P10: Inject Cache Write Boundary
+        save_to_cache(resolved_query, final_payload, components["embeddings"])
+        
+        return jsonify(final_payload)
     except Exception as e:
         err_str = str(e).lower()
         print(f"[ERROR] Ask processing failed: {e}")

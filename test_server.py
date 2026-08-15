@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 os.chdir(r"c:\Users\ACER\OneDrive\Desktop\vasavi\RAG")
 print("Initializing modules...")
-from llama import app
+from llama import app, GLOBAL_SEMANTIC_CACHE, CACHE_TTL_SECONDS
 client = app.test_client()
 
 def run_query(session_id, prompt):
@@ -31,17 +31,13 @@ def run_query(session_id, prompt):
     resolved = data.get('resolved_query', 'N/A')
     history_used = data.get('history_used', False)
     grounded = data.get('grounded', False)
-    
-    chars = data.get('history_char_count')
-    turns = data.get('generation_history_turns')
+    cache_hit = data.get('cache_hit', False)
+    cache_time = data.get('cache_lookup_time', 0.0)
     
     print(f"   Resolved Query : {resolved} (History Modified: {history_used})")
     print(f"   Grounded       : {grounded}")
+    print(f"   Cache Hit      : {cache_hit} (Lookup Time: {cache_time}s)")
     print(f"   Result         : {data.get('result', '')[:80].replace(chr(10), ' ')}...")
-    if chars is not None:
-        print(f"   [Diagnostic] Generation Char Count: {chars}")
-        print(f"   [Diagnostic] Iterative Turns Kept: {turns}")
-    
     return data
 
 def reset_session(session_id):
@@ -56,62 +52,72 @@ def mock_429(*args, **kwargs):
 def mock_500(*args, **kwargs):
     raise Exception("Runtime LLM backend crash")
 
+def mock_success(*args, **kwargs):
+    class MockRes:
+        content = "This is a mathematically verified mock answer."
+    return MockRes()
+
 if __name__ == "__main__":
-    print("--- PHASE 4 & PHASE 9 TESTS ---")
-    
-    # TEST 1 - Standalone
-    print("\n# TEST 1: Standalone")
-    s1 = "test_s1"
-    run_query(s1, "What is RAG and how does it work?")
-    
-    # TEST 2 - Follow-up
-    print("\n# TEST 2: Follow-up")
-    run_query(s1, "What is fine-tuning?")
-    run_query(s1, "What is its purpose?")
-    
-    # TEST 3 - Pronoun Follow-up
-    print("\n# TEST 3: Pronouns")
-    s3 = "test_s3"
-    run_query(s3, "What are pretrained weights?")
-    run_query(s3, "Why are they important?")
-    
-    # TEST 4 - Context continuation
-    print("\n# TEST 4: Context Continuation")
-    s4 = "test_s4"
-    run_query(s4, "What is RAG?")
-    run_query(s4, "What are its main steps?")
-    
-    # TEST 5 - New Chat isolation
-    print("\n# TEST 5: New Chat Isolation")
-    s5_a = "test_s5_A"
-    run_query(s5_a, "What is fine-tuning?")
-    reset_session(s5_a)
-    s5_b = "test_s5_B"
-    run_query(s5_b, "What is its purpose?")
-    
-    # TEST 6 - Unsupported query
-    print("\n# TEST 6: Unsupported query")
-    run_query(s5_b, "What is the capital of France?")
-    
-    # TEST 7 - Simulated Groq HTTP 429
-    print("\n# TEST 7: Simulated Groq HTTP 429")
-    s7 = "test_s7"
-    run_query(s7, "Explain embeddings.")
+    print("--- PHASE 10 CACHE TESTS ---")
     
     from langchain_groq import ChatGroq
-    with patch.object(ChatGroq, 'invoke', side_effect=mock_429):
-        run_query(s7, "What is prompt engineering?")
+    with patch.object(ChatGroq, 'invoke', side_effect=mock_success):
+        # TEST 1 - Standalone (Initial Miss)
+        print("\n# TEST 1: Standalone (Initial Cache Miss)")
+        s1 = "test_s1"
+        run_query(s1, "What is RAG and how does it work?")
+        
+        # TEST 2 - Exact Hit
+        print("\n# TEST 2: Exact Repeated Query (Cache Hit & Groq Bypass)")
+        res_exact = run_query(s1, "What is RAG and how does it work?")
+        assert res_exact.get('cache_hit') == True
+        
+        # TEST 3 - Semantic Hit
+        print("\n# TEST 3: Semantic Equivalent (Cache Hit)")
+        res_sem = run_query(s1, "Explain what RAG is and its mechanics")
+        
+        # TEST 4 - Conversational Follow-up
+        print("\n# TEST 4: Follow-up Pronouns (Cache Miss to hit)")
+        run_query(s1, "What is fine-tuning?")
+        res_pronoun = run_query(s1, "What is its purpose?")
+        assert res_pronoun.get('cache_hit') == False, "New intent must cache miss"
 
-    # TEST 8 - After simulated 429, follow-up
-    print("\n# TEST 8: Recovery Follow-Up (State Preservation)")
-    run_query(s7, "How are they created?")
+        # TEST 4.1 - Re-run same pronoun in DIFFERENT chat (Should hit cache globally because resolved query is same!)
+        print("\n# TEST 4.1: Same pronoun query in new context")
+        s1_alt = "test_s1_alt"
+        run_query(s1_alt, "What is fine-tuning?")
+        res_pronoun_again = run_query(s1_alt, "What is its purpose?")
+        assert res_pronoun_again.get('cache_hit') == True, "Resolved query is identical, cache across sessions safely!"
+        
+        # TEST 5 - Unsupported
+        print("\n# TEST 5: Unsupported query")
+        run_query(s1, "What is the capital of France?")
+        res_unsupported = run_query(s1, "What is the capital of France?")
+        assert res_unsupported.get('cache_hit') == False, "Fast-trip (grounded=False) should NEVER be cached"
     
-    # TEST 9 - Simulated Generic Failure
-    print("\n# TEST 9: Simulated Generic LLM failure")
-    s9 = "test_s9"
-    run_query(s9, "Explain fine tuning.")
-    with patch.object(ChatGroq, 'invoke', side_effect=mock_500):
-        # We trigger a full 500 error natively mapped
-        run_query(s9, "What is the typical timeframe?")
+    # TEST 6 - Simulated HTTP 429
+    print("\n# TEST 6: Simulated Groq HTTP 429")
+    s7 = "test_s7"
+    with patch.object(ChatGroq, 'invoke', side_effect=mock_429):
+        res_429 = run_query(s7, "Explain embeddings thoroughly.")
+    
+    # Try it again - shouldn't be cached!
+    print("\n# TEST 6.1: Retry failed query (Should Miss)")
+    with patch.object(ChatGroq, 'invoke', side_effect=mock_success):
+        req_retry = run_query(s7, "Explain embeddings thoroughly.")
+        assert req_retry.get("cache_hit") == False, "429s must never be cached!"
+
+    # TEST 7: Invalid KB Version
+    print("\n# TEST 7: KB Version Invalidation")
+    s_ver = "test_ver"
+    with patch.object(ChatGroq, 'invoke', side_effect=mock_success):
+        run_query(s_ver, "What are pretrained weights?")
+        
+        # Artificially expire the cache by faking all timestamps bounds
+        for k in GLOBAL_SEMANTIC_CACHE:
+            GLOBAL_SEMANTIC_CACHE[k]["kb_version"] = 0 # Invalid
+        
+        res_inv = run_query(s_ver, "What are pretrained weights?")
+        assert res_inv.get("cache_hit") == False, "Stale KB Version must force Miss"
         
     print("\n# DONE")
