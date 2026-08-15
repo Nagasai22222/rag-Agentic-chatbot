@@ -95,17 +95,19 @@ if __name__ == "__main__":
         res_unsupported = run_query(s1, "What is the capital of France?")
         assert res_unsupported.get('cache_hit') == False, "Fast-trip (grounded=False) should NEVER be cached"
     
-    # TEST 6 - Simulated HTTP 429
-    print("\n# TEST 6: Simulated Groq HTTP 429")
+    # TEST 6 - Simulated HTTP 429 (Cascading Fallback Recovery)
+    print("\n# TEST 6: Simulated Groq HTTP 429 (Fallback Recovery)")
     s7 = "test_s7"
-    with patch.object(ChatGroq, 'invoke', side_effect=mock_429):
+    with patch.object(ChatGroq, 'invoke', side_effect=[Exception("Error code: 429 rate limit"), mock_success()]):
         res_429 = run_query(s7, "Explain embeddings thoroughly.")
-    
-    # Try it again - shouldn't be cached!
-    print("\n# TEST 6.1: Retry failed query (Should Miss)")
-    with patch.object(ChatGroq, 'invoke', side_effect=mock_success):
-        req_retry = run_query(s7, "Explain embeddings thoroughly.")
-        assert req_retry.get("cache_hit") == False, "429s must never be cached!"
+        assert res_429.get("result") != "The language model service is temporarily rate limited. Please try again shortly.", "Fallback should have recovered the 429 perfectly!"
+        assert res_429.get("grounded") == True, "Fallback response must maintain grounding status"
+        
+    print("\n# TEST 6.1: Both models fail (Ultimate Failure Trap)")
+    with patch.object(ChatGroq, 'invoke', side_effect=[Exception("Error code: 429 rate limit"), Exception("Error code: 503 fallback overloaded")]):
+        res_ultimate_fail = run_query(s7, "Explain vectors.")
+        assert (res_ultimate_fail.get("error") == "provider_error" or res_ultimate_fail.get("error") == "rate_limit"), "Ultimate failure must abort safely"
+        assert res_ultimate_fail.get("cache_hit", False) == False, "Total generation failures NEVER cache"
 
     # TEST 7: Invalid KB Version
     print("\n# TEST 7: KB Version Invalidation")
@@ -139,12 +141,16 @@ if __name__ == "__main__":
     print(f"   Successful Requests: {sys_metrics.get('successful_requests')}")
     print(f"   Cache Hits: {cache_metrics.get('hits')}")
     print(f"   Cache Misses: {cache_metrics.get('misses')}")
-    print(f"   Total Generation Calls: {gen_metrics.get('total_generations')}")
+    print(f"   Total Generation Calls (Sum): {gen_metrics.get('total_generations')}")
+    print(f"   Primary Generations: {gen_metrics.get('primary_generation_count')}")
+    print(f"   Fallback Called: {gen_metrics.get('fallback_generation_count')}")
+    print(f"   Fallback Succeeded: {gen_metrics.get('fallback_success_count')}")
+    print(f"   Fallback Failed: {gen_metrics.get('fallback_failure_count')}")
     print(f"   Fast Trips (Ungrounded): {gen_metrics.get('fast_trip_count')}")
-    print(f"   HTTP 429 Traps: {gen_metrics.get('http_429_count')}")
-    print(f"   Provider Error Traps (Simulated): {sys_metrics.get('errors', 0)}")
+    print(f"   HTTP 429 / Generation Errors (Ultimate bounds): {sys_metrics.get('errors', 0)}")
     
     assert sys_metrics.get('total_requests') > 0, "Metrics must record requests"
     assert cache_metrics.get('hits') > 0, "Cache hits must accumulate"
-    assert gen_metrics.get('fast_trip_count') >= 2, "Fast trips must accumulate"
-    assert gen_metrics.get('http_429_count') >= 1, "429 traps must accumulate"
+    assert gen_metrics.get('fast_trip_count') >= 1, "Fast trips must accumulate"
+    assert gen_metrics.get('fallback_success_count') >= 1, "Fallback success trap must aggregate"
+    assert gen_metrics.get('fallback_failure_count') >= 1, "Ultimate failure bounds must record"

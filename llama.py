@@ -249,7 +249,16 @@ def qa_bot():
             temperature=0,
             max_tokens=None,
             timeout=None,
-            max_retries=2,
+            max_retries=1,
+            api_key=os.environ.get("GROQ_API_KEY")
+        )
+        
+        llm_fallback = ChatGroq(
+            model="llama-3.1-8b-instant",
+            temperature=0,
+            max_tokens=None,
+            timeout=None,
+            max_retries=1,
             api_key=os.environ.get("GROQ_API_KEY")
         )
 
@@ -258,6 +267,7 @@ def qa_bot():
         return {
             "db": db, 
             "llm": llm, 
+            "llm_fallback": llm_fallback,
             "prompt": qa_prompt,
             "embeddings": embeddings
         }, None
@@ -323,6 +333,10 @@ GLOBAL_METRICS = {
     },
     "generation": {
         "total_generations": 0,
+        "primary_generation_count": 0,
+        "fallback_generation_count": 0,
+        "fallback_success_count": 0,
+        "fallback_failure_count": 0,
         "grounded_count": 0,
         "fast_trip_count": 0,
         "http_429_count": 0,
@@ -509,24 +523,53 @@ def ask():
             record_metric("generation", "grounded_count", 1)
             record_metric("generation", "total_generations", 1)
             generation_start = time.perf_counter()
-            print("[LLM] Generation started")
+            print("[LLM] Generation started (Primary)")
             
-            formatted_prompt = components["prompt"].format(
-                history=history_text,
-                context="\n\n".join(context_parts),
-                question=resolved_query
+            context_text = "\n\n".join(context_parts)
+            chain_primary = (
+                {"context": lambda x: context_text, "history": lambda x: history_text, "question": lambda x: resolved_query}
+                | components["prompt"]
+                | components["llm"]
             )
-            response = components["llm"].invoke(formatted_prompt)
-            answer = response.content
             
-            # Phase 1/3 Strict Override
-            grounded = fallback_sentence not in answer
+            try:
+                record_metric("generation", "primary_generation_count", 1)
+                res = chain_primary.invoke({})
+                answer = res.content
+            except Exception as e_primary:
+                err_str = str(e_primary).lower()
+                is_recoverable = '429' in err_str or 'rate limit' in err_str or 'too many requests' in err_str or 'rate_limit' in err_str or '503' in err_str or '500' in err_str or 'deadline' in err_str or 'connection' in err_str
+                
+                if not is_recoverable:
+                    raise e_primary
+                    
+                print(f"[LLM] Primary model failed cleanly ({type(e_primary).__name__}), triggering fallback...")
+                record_metric("generation", "fallback_generation_count", 1)
+                
+                chain_fallback = (
+                    {"context": lambda x: context_text, "history": lambda x: history_text, "question": lambda x: resolved_query}
+                    | components["prompt"]
+                    | components["llm_fallback"]
+                )
+                
+                try:
+                    res = chain_fallback.invoke({})
+                    answer = res.content
+                    record_metric("generation", "fallback_success_count", 1)
+                    print("[LLM] Fallback generated successfully")
+                except Exception as e_fallback:
+                    record_metric("generation", "fallback_failure_count", 1)
+                    print(f"[LLM] Fallback model failed: {type(e_fallback).__name__}")
+                    raise e_fallback
             
             generation_time = time.perf_counter() - generation_start
-            print("[LLM] Generation completed")
+            print("[LLM] Generation sequence completed")
             
             record_metric("timing", "total_generation_latency", generation_time)
             record_metric("timing", "generation_events", 1)
+            
+            # Phase 1/3 Strict Override
+            grounded = fallback_sentence not in answer
             
             if grounded:
                 add_to_session(user_id, "user", query)
