@@ -251,6 +251,138 @@ body {
   0%, 60%, 100% { transform: translateY(0); }
   30% { transform: translateY(-7px); }
 }
+
+/* Phase 3 Citation and Evidence CSS */
+.citation-badge {
+  display: inline-block;
+  background: rgba(124, 58, 237, 0.1);
+  color: #7c3aed;
+  border: 1px solid rgba(124, 58, 237, 0.2);
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 0 4px;
+  margin: 0 2px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+
+.evidence-container {
+  margin-top: 14px;
+  border-top: 1px dashed rgba(228, 228, 231, 0.8);
+  padding-top: 8px;
+}
+.evidence-container summary {
+  font-size: 13px;
+  color: #52525b;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+  display: inline-block;
+}
+.evidence-container summary:hover { color: #7c3aed; }
+.evidence-block {
+  background: rgba(255, 255, 255, 0.6);
+  border-left: 3px solid #7c3aed;
+  padding: 8px 12px;
+  margin-top: 8px;
+  border-radius: 4px;
+  font-size: 12.5px;
+  color: #3f3f46;
+  white-space: pre-wrap;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.evidence-block::-webkit-scrollbar { width: 4px; }
+.evidence-block::-webkit-scrollbar-thumb { background: rgba(124, 58, 237, 0.3); border-radius: 10px; }
+.evidence-header {
+  font-weight: 700;
+  color: #1d4ed8;
+  margin-bottom: 4px;
+  font-size: 13px;
+}
+
+/* --- Phase 1: RAG Metadata CSS --- */
+.processing-panel {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(228, 228, 231, 0.8);
+  border-radius: 16px;
+  padding: 16px 20px;
+  margin-bottom: 24px;
+  width: fit-content;
+  max-width: 80%;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.03);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.spinner-icon {
+  width: 24px;
+  height: 24px;
+  border: 3px solid rgba(124, 58, 237, 0.2);
+  border-top-color: #7c3aed;
+  border-radius: 50%;
+  animation: spinner 1s linear infinite;
+}
+@keyframes spinner { to { transform: rotate(360deg); } }
+.processing-text {
+  font-size: 15px;
+  color: #52525b;
+  font-weight: 500;
+  transition: opacity 0.3s ease;
+}
+
+.rag-insights {
+  margin-top: 12px;
+  padding: 14px 18px;
+  background: rgba(244, 244, 245, 0.6);
+  border: 1px solid rgba(228, 228, 231, 0.5);
+  border-radius: 12px;
+  font-size: 13px;
+  color: #3f3f46;
+}
+.rag-insights-title {
+  font-weight: 700;
+  margin-bottom: 12px;
+  font-size: 14px;
+  color: #18181b;
+}
+.status-grounded {
+  color: #059669;
+  font-weight: 600;
+  display: flex; align-items: center; gap: 6px;
+  margin-bottom: 10px;
+}
+.status-warning {
+  color: #d97706;
+  font-weight: 600;
+  display: flex; align-items: center; gap: 6px;
+  margin-bottom: 10px;
+}
+.source-list {
+  margin-top: 14px;
+  border-top: 1px solid rgba(0,0,0,0.08);
+  padding-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.source-item {
+  background: rgba(255, 255, 255, 0.8);
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(228, 228, 231, 0.6);
+}
+.source-title {
+  font-weight: 600;
+  color: #1d4ed8;
+  margin-bottom: 4px;
+}
+.source-meta {
+  font-size: 12px;
+  color: #71717a;
+}
 @keyframes elementFadeIn { from { opacity: 0; transform: scale(0.98); } to { opacity: 1; transform: scale(1); } }
 @keyframes bubblePopUp { from { opacity: 0; transform: translateY(16px) scale(0.95); } to { opacity: 1; transform: translateY(0) scale(1); } }
 </style>
@@ -271,7 +403,7 @@ body {
     <textarea id="input" rows="1" placeholder="Ask questions related to Gen AI..."></textarea>
     
     <div class="input-right-actions">
-      <button class="large-clear-btn" id="clearBtn" type="button">Clear Space</button>
+      <button class="large-clear-btn" id="clearBtn" type="button">+ New Chat</button>
       <button class="action-icon-btn" id="sendBtn" type="button" disabled title="Transmit Query">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
       </button>
@@ -386,6 +518,7 @@ const sendBtn = $('#sendBtn');
 const clearBtn = $('#clearBtn');
 
 let typingRow = null;
+let processingInterval = null;
 
 function autoScrollToBottom(){ conversationZone.scrollTo({ top: conversationZone.scrollHeight, behavior: 'smooth' }); }
 
@@ -401,25 +534,203 @@ function createMessageBubble(role, text, isTyping = false) {
   row.appendChild(bubble); conversationZone.appendChild(row); autoScrollToBottom(); return row;
 }
 
+function createProcessingBubble() {
+  if (greetingScreen) greetingScreen.style.display = 'none';
+  const row = document.createElement('div'); row.className = `chat-row bot`;
+  
+  const panel = document.createElement('div'); 
+  panel.className = 'processing-panel';
+  
+  const spinner = document.createElement('div');
+  spinner.className = 'spinner-icon';
+  
+  const text = document.createElement('div');
+  text.className = 'processing-text';
+  text.textContent = 'Understanding your question...';
+  
+  panel.appendChild(spinner);
+  panel.appendChild(text);
+  row.appendChild(panel);
+  conversationZone.appendChild(row); 
+  autoScrollToBottom(); 
+  
+  const stages = [
+    "Understanding your question...",
+    "Searching the knowledge base...",
+    "Retrieving relevant documents...",
+    "Analyzing document context...",
+    "Generating grounded answer..."
+  ];
+  let currentStageIndex = 0;
+  
+  processingInterval = setInterval(() => {
+    currentStageIndex = (currentStageIndex + 1) % stages.length;
+    text.style.opacity = 0;
+    setTimeout(() => {
+      text.textContent = stages[currentStageIndex];
+      text.style.opacity = 1;
+    }, 150);
+  }, 1500);
+  
+  return row;
+}
+
+function renderBotResponse(data, clientTime) {
+  const row = document.createElement('div'); row.className = `chat-row bot`;
+  const bubble = document.createElement('div'); bubble.className = 'chat-bubble';
+  
+  const textDiv = document.createElement('div');
+  let rawText = data.result || '';
+  rawText = rawText.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  
+  // Safe Regex replacing citations:
+  rawText = rawText.replace(/\[Source\s+\d+(?:[,\xA0\s]*Page\s+[^\]]+)?\]/gi, (match) => {
+    return `<span class="citation-badge">${match}</span>`;
+  });
+  textDiv.innerHTML = rawText;
+  
+  bubble.appendChild(textDiv);
+
+  // Expandable view evidence section
+  if (data?.sources && data.sources.length > 0) {
+      const evidenceDetails = document.createElement('details');
+      evidenceDetails.className = 'evidence-container';
+      
+      const summary = document.createElement('summary');
+      summary.textContent = 'View Evidence';
+      evidenceDetails.appendChild(summary);
+      
+      const evidenceWrapper = document.createElement('div');
+      evidenceWrapper.style.marginTop = '8px';
+      
+      data.sources.forEach(chunk => {
+          let chunkStr = chunk.chunk_text ? chunk.chunk_text : "No text available.";
+          chunkStr = chunkStr.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+          
+          const block = document.createElement('div');
+          block.className = 'evidence-block';
+          
+          const header = document.createElement('div');
+          header.className = 'evidence-header';
+          header.textContent = `Source ${chunk.chunk} - ${chunk.source} (Page ${chunk.page})`;
+          
+          const txt = document.createElement('div');
+          txt.innerHTML = chunkStr;
+          
+          block.appendChild(header);
+          block.appendChild(txt);
+          evidenceWrapper.appendChild(block);
+      });
+      evidenceDetails.appendChild(evidenceWrapper);
+      bubble.appendChild(evidenceDetails);
+  }
+  
+  if (data?.sources) {
+    const isGrounded = data?.grounded !== false;
+    const statusHtml = isGrounded 
+        ? `<div class="status-grounded">
+             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+             ✓ Grounded in Knowledge Base
+           </div>`
+        : `<div class="status-warning">
+             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+             ⚠ Limited Knowledge Base Support
+           </div>`;
+           
+    const retrievedChunks = data.retrieved_chunks || 0;
+    const uniqueDocs = data.unique_documents || 0;
+    const backendTime = (data.response_time || 0).toFixed(3);
+    const retTime = data.retrieval_time ? data.retrieval_time.toFixed(3) : "0.000";
+    const genTime = data.generation_time ? data.generation_time.toFixed(3) : "0.000";
+    
+    let sourcesHtml = '';
+    if (data.citation_sources && data.citation_sources.length > 0) {
+        sourcesHtml = `<div class="source-list">
+        <div style="font-weight: 600; margin-bottom: 2px;">Sources</div>`;
+        
+        data.citation_sources.forEach(src => {
+           const pages = src.pages.join(", ");
+           const chunks = src.chunks.join(", ");
+           const bestScore = src.scores && src.scores.length > 0 ? Math.min(...src.scores).toFixed(4) : "N/A";
+           
+           sourcesHtml += `<div class="source-item">
+             <div class="source-title">📄 ${src.source}</div>
+             <div class="source-meta">Pages: ${pages} · Chunks: ${chunks}</div>
+             <div style="font-size:11px; color:#a1a1aa; margin-top:2px;">Best match distance: ${bestScore}</div>
+           </div>`;
+        });
+        sourcesHtml += `</div>`;
+    }
+    
+    const insightsDiv = document.createElement('div');
+    insightsDiv.className = 'rag-insights';
+    insightsDiv.innerHTML = `
+        <div class="rag-insights-title">RAG Insights</div>
+        ${statusHtml}
+        <div style="margin-bottom:5px">📚 ${retrievedChunks} chunks retrieved</div>
+        <div style="margin-bottom:5px">📄 ${uniqueDocs} document(s) used</div>
+        <div style="margin-bottom:2px; font-family: monospace; font-size:12px; margin-top:8px;">🔎 Retrieval: ${retTime}s | 🤖 Gen: ${genTime}s</div>
+        <div style="margin-bottom:5px; font-family: monospace; font-size:12px;">⏱️ Backend: ${backendTime}s | ⚡ Total Client: ${clientTime}s</div>
+        ${sourcesHtml}
+    `;
+    
+    bubble.appendChild(insightsDiv);
+  }
+  
+  row.appendChild(bubble); 
+  conversationZone.appendChild(row); 
+  autoScrollToBottom();
+}
+
 async function clearChatSpace(){
   try {
     await fetch(RESET_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId }) });
     conversationZone.querySelectorAll('.chat-row').forEach(row => row.remove());
+    // Rotate Session Key to enforce true backend Conversation bounds mapping
+    userId = uuidv4();
+    localStorage.setItem("qf_userId", userId);
+    
     if (greetingScreen) greetingScreen.style.display = 'flex';
   } catch(e) { alert("Error clearing chat space."); }
 }
 
 async function handleMessageTransmission(){
   const promptText = inputEl.value.trim(); if (!promptText) return;
+  
   inputEl.value = ''; inputEl.style.height = 'auto'; sendBtn.disabled = true;
   createMessageBubble('user', promptText);
-  typingRow = createMessageBubble('bot', '', true);
+  
+  typingRow = createProcessingBubble();
+  const startTime = performance.now();
+  
   try {
     const res = await fetch(ASK_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: promptText, userId }) });
     const data = await res.json();
+    
+    if(processingInterval) clearInterval(processingInterval);
     if(typingRow) typingRow.remove();
-    setTimeout(() => createMessageBubble('bot', res.ok ? (data?.result || '').replace(/<br\s*\/?>/gi, '\n') : 'Error parsing response.'), 100);
-  } catch(err) { if(typingRow) typingRow.remove(); createMessageBubble('bot', 'Network connection interrupted.'); }
+    
+    const clientEnd = performance.now();
+    const clientTime = ((clientEnd - startTime) / 1000).toFixed(3);
+    
+    if (!res.ok) {
+       createMessageBubble('bot', data?.error || 'Sorry, I couldn\'t process that request. Please try again.');
+       return;
+    }
+    
+    // Check if it's the old response format or new format
+    if (data.result !== undefined && data.sources !== undefined) {
+        renderBotResponse(data, clientTime);
+    } else {
+        createMessageBubble('bot', data.result || 'Error parsing response.');
+    }
+  } catch(err) { 
+    if(processingInterval) clearInterval(processingInterval);
+    if(typingRow) typingRow.remove(); 
+    createMessageBubble('bot', 'Network connection interrupted. Please try again.'); 
+  } finally {
+    sendBtn.disabled = false;
+  }
 }
 
 inputEl.addEventListener('input', () => {
