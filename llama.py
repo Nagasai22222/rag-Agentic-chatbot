@@ -140,6 +140,7 @@ def save_to_cache(resolved_query, payload, embedder):
     if len(GLOBAL_SEMANTIC_CACHE) >= MAX_CACHE_ENTRIES:
         oldest_k = next(iter(GLOBAL_SEMANTIC_CACHE))
         del GLOBAL_SEMANTIC_CACHE[oldest_k]
+        record_metric("cache", "evictions", 1)
         
     query_emb = np.array(embedder.embed_query(resolved_query))
     GLOBAL_SEMANTIC_CACHE[resolved_query] = {
@@ -303,6 +304,72 @@ def get_rag_components():
 
 
 # ================================
+# PHASE 11 OBSERVABILITY METRICS
+# ================================
+GLOBAL_METRICS = {
+    "system": {
+        "boot_time": time.time(),
+        "total_requests": 0,
+        "successful_requests": 0,
+        "errors": 0,
+    },
+    "retrieval": {
+        "total_chunks_retrieved": 0,
+    },
+    "cache": {
+        "hits": 0,
+        "misses": 0,
+        "evictions": 0,
+    },
+    "generation": {
+        "total_generations": 0,
+        "grounded_count": 0,
+        "fast_trip_count": 0,
+        "http_429_count": 0,
+        "generation_failures": 0,
+    },
+    "timing": {
+        "total_retrieval_latency": 0.0,
+        "total_generation_latency": 0.0,
+        "total_request_latency": 0.0,
+        "retrieval_events": 0,
+        "generation_events": 0
+    }
+}
+_metrics_lock = threading.Lock()
+
+def record_metric(category, key, increment=1):
+    try:
+        with _metrics_lock:
+            GLOBAL_METRICS[category][key] += increment
+    except Exception:
+        pass
+
+@app.route("/metrics", methods=["GET"])
+def get_metrics():
+    try:
+        with _metrics_lock:
+            response = {
+                "system": {
+                    "uptime_seconds": round(time.time() - GLOBAL_METRICS["system"]["boot_time"], 2),
+                    "total_requests": GLOBAL_METRICS["system"]["total_requests"],
+                    "successful_requests": GLOBAL_METRICS["system"]["successful_requests"],
+                    "errors": GLOBAL_METRICS["system"]["errors"]
+                },
+                "retrieval": GLOBAL_METRICS["retrieval"],
+                "cache": GLOBAL_METRICS["cache"],
+                "generation": GLOBAL_METRICS["generation"],
+                "timing": {
+                    "avg_retrieval_latency": round(GLOBAL_METRICS["timing"]["total_retrieval_latency"] / max(1, GLOBAL_METRICS["timing"]["retrieval_events"]), 3),
+                    "avg_generation_latency": round(GLOBAL_METRICS["timing"]["total_generation_latency"] / max(1, GLOBAL_METRICS["timing"]["generation_events"]), 3),
+                    "avg_total_latency": round(GLOBAL_METRICS["timing"]["total_request_latency"] / max(1, GLOBAL_METRICS["system"]["total_requests"]), 3)
+                }
+            }
+            return jsonify(response)
+    except Exception:
+        return jsonify({"error": "metrics failure"}), 500
+
+# ================================
 # ROUTES
 # ================================
 
@@ -350,6 +417,7 @@ def ask():
     history_text = "\n".join([f"{msg['role'].title()}: {msg['content']}" for msg in gen_history]) if gen_history else "No previous conversation."
 
     try:
+        record_metric("system", "total_requests", 1)
         print(f"\n[QUERY] {resolved_query}")
         
         # PHASE 10 CACHE LOOKUP
@@ -358,6 +426,7 @@ def ask():
         cache_lookup_time = time.perf_counter() - cache_start
         
         if cached_payload is not None:
+            record_metric("cache", "hits", 1)
             print("[CACHE] HIT! Bypassing Langchain/Groq architecture.")
             response_time = time.perf_counter() - start_time
             cached_payload["response_time"] = round(response_time, 3)
@@ -367,14 +436,20 @@ def ask():
             add_to_session(user_id, "user", query)
             add_to_session(user_id, "assistant", cached_payload["result"])
             
+            record_metric("timing", "total_request_latency", response_time)
+            record_metric("system", "successful_requests", 1)
             return jsonify(cached_payload)
             
+        record_metric("cache", "misses", 1)
         print("[CACHE] MISS.")
         
         # Retrieval Stage
         retrieval_start = time.perf_counter()
         docs_and_scores = components["db"].similarity_search_with_score(resolved_query, k=int(os.getenv("RETRIEVAL_K", "15")))
         retrieval_time = time.perf_counter() - retrieval_start
+        
+        record_metric("timing", "total_retrieval_latency", retrieval_time)
+        record_metric("timing", "retrieval_events", 1)
         
         relevance_threshold = float(os.getenv("RELEVANCE_THRESHOLD", "1.50"))
         diversity_penalty = float(os.getenv("DIVERSITY_PENALTY", "0.15"))
@@ -420,6 +495,7 @@ def ask():
                     item["current_score"] += diversity_penalty
             
         citation_sources = list(citation_sources_map.values())
+        record_metric("retrieval", "total_chunks_retrieved", len(sources_list))
         
         if not sources_list:
             answer = fallback_sentence
@@ -430,6 +506,8 @@ def ask():
             print(f"[GROUNDING] Grounded: {grounded}")
         
         if grounded:
+            record_metric("generation", "grounded_count", 1)
+            record_metric("generation", "total_generations", 1)
             generation_start = time.perf_counter()
             print("[LLM] Generation started")
             
@@ -447,14 +525,20 @@ def ask():
             generation_time = time.perf_counter() - generation_start
             print("[LLM] Generation completed")
             
+            record_metric("timing", "total_generation_latency", generation_time)
+            record_metric("timing", "generation_events", 1)
+            
             if grounded:
                 add_to_session(user_id, "user", query)
                 add_to_session(user_id, "assistant", answer)
         else:
+            record_metric("generation", "fast_trip_count", 1)
             generation_time = 0
             print("[LLM] Generation skipped (Fast-trip)")
             
         response_time = time.perf_counter() - start_time
+        record_metric("timing", "total_request_latency", response_time)
+        record_metric("system", "successful_requests", 1)
         
         final_payload = {
             "result": answer,
@@ -481,15 +565,18 @@ def ask():
         
         return jsonify(final_payload)
     except Exception as e:
+        record_metric("system", "errors", 1)
         err_str = str(e).lower()
         print(f"[ERROR] Ask processing failed: {e}")
         if '429' in err_str or 'rate limit' in err_str or 'too many requests' in err_str or 'rate_limit' in err_str:
+            record_metric("generation", "http_429_count", 1)
             return jsonify({
                 "error": "rate_limit",
                 "message": "The language model service is temporarily rate limited. Please try again shortly.",
                 "retryable": True
             }), 429
             
+        record_metric("generation", "generation_failures", 1)
         return jsonify({
             "error": "provider_error",
             "message": "The language model service encountered an error. Please try again.",

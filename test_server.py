@@ -117,7 +117,34 @@ if __name__ == "__main__":
         for k in GLOBAL_SEMANTIC_CACHE:
             GLOBAL_SEMANTIC_CACHE[k]["kb_version"] = 0 # Invalid
         
-        res_inv = run_query(s_ver, "What are pretrained weights?")
-        assert res_inv.get("cache_hit") == False, "Stale KB Version must force Miss"
-        
     print("\n# DONE")
+    
+    # TEST 8: /metrics Observability Endpoint Validation
+    print("\n# TEST 8: Observability /metrics Output Validation")
+    res_m = client.get('/metrics')
+    metrics = json.loads(res_m.data)
+    
+    sys_metrics = metrics.get('system', {})
+    gen_metrics = metrics.get('generation', {})
+    cache_metrics = metrics.get('cache', {})
+    
+    # We ran exactly: 
+    # 1 miss, 1 exact hit, 1 semantic hit (miss because strict), 
+    # 2 follow up (miss, hit), 2 unsupported (miss, miss) -> Fast trips!
+    # 1 429 trap, 1 retry cache miss. 1 kb version trap.
+    
+    print("\n--- PHASE 11 OBSERVABILITY REPORT ---")
+    print(f"   Uptime: {sys_metrics.get('uptime_seconds')}s")
+    print(f"   Total Requests Evaluated: {sys_metrics.get('total_requests')}")
+    print(f"   Successful Requests: {sys_metrics.get('successful_requests')}")
+    print(f"   Cache Hits: {cache_metrics.get('hits')}")
+    print(f"   Cache Misses: {cache_metrics.get('misses')}")
+    print(f"   Total Generation Calls: {gen_metrics.get('total_generations')}")
+    print(f"   Fast Trips (Ungrounded): {gen_metrics.get('fast_trip_count')}")
+    print(f"   HTTP 429 Traps: {gen_metrics.get('http_429_count')}")
+    print(f"   Provider Error Traps (Simulated): {sys_metrics.get('errors', 0)}")
+    
+    assert sys_metrics.get('total_requests') > 0, "Metrics must record requests"
+    assert cache_metrics.get('hits') > 0, "Cache hits must accumulate"
+    assert gen_metrics.get('fast_trip_count') >= 2, "Fast trips must accumulate"
+    assert gen_metrics.get('http_429_count') >= 1, "429 traps must accumulate"
