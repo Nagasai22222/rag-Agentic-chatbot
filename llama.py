@@ -272,6 +272,9 @@ def ask():
     history = get_session_history(user_id)
     resolved_query = resolve_conversational_query(query, history)
     history_used = (resolved_query != query)
+    
+    gen_history = history[-4:] if len(history) > 4 else history
+    history_text = "\n".join([f"{msg['role'].title()}: {msg['content']}" for msg in gen_history]) if gen_history else "No previous conversation."
 
     try:
         print(f"\n[QUERY] {resolved_query}")
@@ -338,8 +341,6 @@ def ask():
             generation_start = time.perf_counter()
             print("[LLM] Generation started")
             
-            history_text = "\n".join([f"{msg['role'].title()}: {msg['content']}" for msg in history]) if history else "No previous conversation."
-            
             formatted_prompt = components["prompt"].format(
                 history=history_text,
                 context="\n\n".join(context_parts),
@@ -376,11 +377,25 @@ def ask():
             "rag_initialized": True,
             "conversation_id": user_id,
             "resolved_query": resolved_query,
-            "history_used": history_used
+            "history_used": history_used,
+            "history_char_count": len(history_text),
+            "generation_history_turns": len(gen_history) // 2
         })
     except Exception as e:
+        err_str = str(e).lower()
         print(f"[ERROR] Ask processing failed: {e}")
-        return jsonify({"error": "An internal server error occurred while processing your request."}), 500
+        if '429' in err_str or 'rate limit' in err_str or 'too many requests' in err_str or 'rate_limit' in err_str:
+            return jsonify({
+                "error": "rate_limit",
+                "message": "The language model service is temporarily rate limited. Please try again shortly.",
+                "retryable": True
+            }), 429
+            
+        return jsonify({
+            "error": "provider_error",
+            "message": "The language model service encountered an error. Please try again.",
+            "retryable": False
+        }), 500
 
 
 @app.route("/reset", methods=["POST"])

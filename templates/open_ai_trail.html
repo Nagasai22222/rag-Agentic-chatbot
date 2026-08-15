@@ -810,7 +810,8 @@ async function handleMessageTransmission(){
     const clientTime = ((clientEnd - startTime) / 1000).toFixed(3);
 
     if (!res.ok) {
-       createMessageBubble('bot', data?.error || 'Sorry, I couldn\'t process that request. Please try again.');
+       let errorMsg = data?.message || data?.error || "Sorry, I couldn't process that request. Please try again.";
+       createMessageBubble('bot', errorMsg);
        return;
     }
 
