@@ -539,6 +539,57 @@ const clearBtn = $('#clearBtn');
 
 let typingRow = null;
 let processingInterval = null;
+const MAX_STORED_MESSAGES = 50;
+
+function saveToHistory(role, payload) {
+    try {
+        let history = JSON.parse(localStorage.getItem('qf_chatHistory')) || [];
+        if (!Array.isArray(history)) history = [];
+        history.push({ role, payload });
+        if (history.length > MAX_STORED_MESSAGES) {
+            history = history.slice(history.length - MAX_STORED_MESSAGES);
+        }
+        localStorage.setItem('qf_chatHistory', JSON.stringify(history));
+    } catch(e) {
+        console.warn('LocalStorage limit reached natively', e);
+        try {
+            let history = JSON.parse(localStorage.getItem('qf_chatHistory')) || [];
+            if(Array.isArray(history) && history.length > 5) {
+                history = history.slice(history.length - 5);
+                localStorage.setItem('qf_chatHistory', JSON.stringify(history));
+            } else {
+                localStorage.removeItem('qf_chatHistory');
+            }
+        } catch(err) {
+            localStorage.removeItem('qf_chatHistory');
+        }
+    }
+}
+
+function restoreSession() {
+    try {
+        const historyStr = localStorage.getItem('qf_chatHistory');
+        if (!historyStr) return;
+        const history = JSON.parse(historyStr);
+        if (!Array.isArray(history)) {
+            localStorage.removeItem('qf_chatHistory');
+            return;
+        }
+
+        history.forEach(msg => {
+            if (msg.role === 'user') {
+                createMessageBubble('user', msg.payload);
+            } else if (msg.role === 'assistant') {
+                renderBotResponse(msg.payload, msg.payload.clientTime || "0.000");
+            }
+        });
+    } catch(e) {
+        console.error("Corrupted history footprint parsed naturally", e);
+        localStorage.removeItem('qf_chatHistory');
+    }
+}
+
+window.addEventListener('DOMContentLoaded', restoreSession);
 
 function autoScrollToBottom(){ conversationZone.scrollTo({ top: conversationZone.scrollHeight, behavior: 'smooth' }); }
 
@@ -733,6 +784,7 @@ async function clearChatSpace(){
     // Rotate Session Key to enforce true backend Conversation bounds mapping
     userId = uuidv4();
     localStorage.setItem("qf_userId", userId);
+    localStorage.removeItem("qf_chatHistory");
 
     if (greetingScreen) greetingScreen.style.display = 'flex';
   } catch(e) { alert("Error clearing chat space."); }
@@ -764,6 +816,9 @@ async function handleMessageTransmission(){
 
     // Check if it's the old response format or new format
     if (data.result !== undefined && data.sources !== undefined) {
+        saveToHistory('user', promptText);
+        data.clientTime = clientTime;
+        saveToHistory('assistant', data);
         renderBotResponse(data, clientTime);
     } else {
         createMessageBubble('bot', data.result || 'Error parsing response.');
