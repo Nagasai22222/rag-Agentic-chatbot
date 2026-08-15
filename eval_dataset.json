@@ -1,0 +1,41 @@
+[
+    { "id": "RAG-001", "category": "basic_retrieval", "question": "What is RAG?", "expected_grounded": true, "required_terms": ["retrieval", "generation"] },
+    { "id": "RAG-002", "category": "basic_retrieval", "question": "What is fine-tuning?", "expected_grounded": true, "required_terms": ["model", "data"] },
+    { "id": "RAG-003", "category": "basic_retrieval", "question": "What are pretrained weights?", "expected_grounded": true, "required_terms": ["train", "weight"] },
+    { "id": "RAG-004", "category": "basic_retrieval", "question": "Explain the concept of attention mechanism.", "expected_grounded": true, "required_terms": ["attention"] },
+    { "id": "RAG-005", "category": "basic_retrieval", "question": "What is a Transformer model?", "expected_grounded": true, "required_terms": ["transformer"] },
+    { "id": "RAG-006", "category": "basic_retrieval", "question": "How do large language models work?", "expected_grounded": true, "required_terms": [] },
+    { "id": "RAG-007", "category": "basic_retrieval", "question": "What is zero-shot learning?", "expected_grounded": true, "required_terms": [] },
+    { "id": "RAG-008", "category": "basic_retrieval", "question": "What is tokenization?", "expected_grounded": true, "required_terms": ["token"] },
+    { "id": "RAG-009", "category": "basic_retrieval", "question": "Define context window.", "expected_grounded": true, "required_terms": ["context"] },
+    { "id": "RAG-010", "category": "basic_retrieval", "question": "Describe few-shot prompting.", "expected_grounded": true, "required_terms": ["prompt"] },
+
+    { "id": "RAG-011", "category": "unsupported", "question": "What is the capital of France?", "expected_grounded": false, "required_terms": ["I couldn't find enough information"] },
+    { "id": "RAG-012", "category": "unsupported", "question": "How do I bake a chocolate cake?", "expected_grounded": false, "required_terms": ["I couldn't find enough information"] },
+    { "id": "RAG-013", "category": "unsupported", "question": "Who won the World Cup in 1998?", "expected_grounded": false, "required_terms": ["I couldn't find enough information"] },
+    { "id": "RAG-014", "category": "unsupported", "question": "Explain the plot of Star Wars.", "expected_grounded": false, "required_terms": ["I couldn't find enough information"] },
+    { "id": "RAG-015", "category": "unsupported", "question": "What is the best way to invest in stocks?", "expected_grounded": false, "required_terms": ["I couldn't find enough information"] },
+
+    { "id": "RAG-016", "category": "conversation", "question": "What is artificial intelligence?", "expected_grounded": true, "required_terms": [], "conversation_id": "conv-1" },
+    { "id": "RAG-017", "category": "conversation", "question": "Why is it important?", "expected_grounded": true, "required_terms": [], "conversation_id": "conv-1" },
+    { "id": "RAG-018", "category": "conversation", "question": "Who created it?", "expected_grounded": true, "required_terms": [], "conversation_id": "conv-1" },
+
+    { "id": "RAG-019", "category": "conversation", "question": "Define prompt engineering.", "expected_grounded": true, "required_terms": [], "conversation_id": "conv-2" },
+    { "id": "RAG-020", "category": "conversation", "question": "What are its key benefits?", "expected_grounded": true, "required_terms": [], "conversation_id": "conv-2" },
+    
+    { "id": "RAG-021", "category": "conversation", "question": "Explain embeddings.", "expected_grounded": true, "required_terms": [], "conversation_id": "conv-3" },
+    { "id": "RAG-022", "category": "conversation", "question": "How are they created?", "expected_grounded": true, "required_terms": [], "conversation_id": "conv-3" },
+
+    { "id": "RAG-023", "category": "multi_doc", "question": "Compare fine-tuning and RAG.", "expected_grounded": true, "required_terms": [] },
+    { "id": "RAG-024", "category": "multi_doc", "question": "What are the common challenges in deploying LLMs?", "expected_grounded": true, "required_terms": [] },
+    { "id": "RAG-025", "category": "multi_doc", "question": "Summarize the key capabilities of open-source models.", "expected_grounded": true, "required_terms": [] },
+    
+    { "id": "RAG-026", "category": "edge_case", "question": "RAG?", "expected_grounded": true, "required_terms": [] },
+    { "id": "RAG-027", "category": "edge_case", "question": "fine tuning", "expected_grounded": true, "required_terms": [] },
+    { "id": "RAG-028", "category": "edge_case", "question": "the AI", "expected_grounded": true, "required_terms": [] },
+    { "id": "RAG-029", "category": "edge_case", "question": "how does that stuff work generally speaking?", "expected_grounded": false, "required_terms": ["I couldn't find enough information"] },
+    
+    { "id": "RAG-030", "category": "citations", "question": "What are the limitations of vector databases?", "expected_grounded": true, "required_terms": [], "requires_citation": true },
+    { "id": "RAG-031", "category": "citations", "question": "How is chunk size determined?", "expected_grounded": false, "required_terms": [], "requires_citation": true },
+    { "id": "RAG-032", "category": "citations", "question": "Explain hybrid search.", "expected_grounded": true, "required_terms": [], "requires_citation": true }
+]

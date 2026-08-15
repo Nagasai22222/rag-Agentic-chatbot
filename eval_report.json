@@ -1,0 +1,85 @@
+{
+  "evaluation_version": "phase-8",
+  "timestamp": 1786790590.0998747,
+  "total_tests": 32,
+  "pass": 7,
+  "fail": 2,
+  "threshold_edge_cases": 1,
+  "test_data_errors": 0,
+  "evaluator_errors": 0,
+  "blocked_by_rate_limit": 0,
+  "api_errors": 22,
+  "timeouts": 0,
+  "manual_review": 0,
+  "metrics": {
+    "retrieval": {
+      "attempts": 10,
+      "evaluated": 10,
+      "successes": 1,
+      "failures": 9,
+      "blocked": 0
+    },
+    "grounding": {
+      "supported_attempts": 4,
+      "supported_successes": 1,
+      "unsupported_attempts": 6,
+      "correct_rejections": 6,
+      "blocked": 0
+    },
+    "citations": {
+      "attempts": 0,
+      "citations_present": 0,
+      "valid_sources": 0,
+      "citation_evaluation_blocked": 0
+    },
+    "conversation": {
+      "attempts": 2,
+      "successes": 0,
+      "blocked": 0
+    },
+    "performance": {
+      "retrieval_times": [
+        0.272,
+        0.018,
+        0.02,
+        0.018,
+        0.016,
+        0.019,
+        0.012,
+        0.013,
+        0.011,
+        0.02
+      ],
+      "generation_times": [
+        0.625,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "response_times": [
+        0.8983078002929688,
+        0.01981663703918457,
+        0.02016162872314453,
+        0.019323348999023438,
+        0.017544031143188477,
+        0.019803285598754883,
+        0.013100385665893555,
+        0.014380693435668945,
+        0.012210369110107422,
+        0.021600961685180664
+      ]
+    }
+  },
+  "averages": {
+    "avg_generation_time": 0.0625,
+    "avg_retrieval_time": 0.041900000000000014
+  },
+  "failures": [],
+  "blocked_tests": []
+}
