@@ -151,6 +151,111 @@ def save_to_cache(resolved_query, payload, embedder):
     }
 
 # ================================
+# PHASE 13 CITATION VERIFICATION ENGINE
+# ================================
+
+def verify_and_sanitize_citations(answer, sources_list, citation_sources_map=None):
+    start_v = time.perf_counter()
+    if not answer or not sources_list:
+        return answer, {
+            "total_citations": 0,
+            "valid_citations": 0,
+            "invalid_citations": 0,
+            "sanitized_citations": 0,
+            "verification_time": 0.0
+        }
+        
+    pattern = r'\[Source\s+(\d+)(?:,\s*Pages?\s*([^\]]+))?\]'
+    matches = list(re.finditer(pattern, answer, flags=re.IGNORECASE))
+    
+    total_citations = len(matches)
+    valid_citations = 0
+    invalid_citations = 0
+    
+    # 1. Chunk map: chunk_num (1..N) -> valid page string
+    chunk_valid_pages = {}
+    for item in sources_list:
+        c_num = item.get("chunk")
+        p_num = item.get("page")
+        if c_num is not None:
+            chunk_valid_pages[int(c_num)] = str(p_num).strip() if p_num is not None else "Unknown"
+            
+    # 2. Doc map: doc_id (1..M) -> list of valid page strings
+    doc_valid_pages = {}
+    if citation_sources_map:
+        for s_file, c_data in citation_sources_map.items():
+            d_id = c_data.get("id")
+            pages = [str(p).strip() for p in c_data.get("pages", [])]
+            if d_id is not None:
+                doc_valid_pages[int(d_id)] = pages
+                
+    sanitized_answer = answer
+    
+    for match in reversed(matches):
+        src_num = int(match.group(1))
+        page_str = match.group(2)
+        
+        is_valid = False
+        
+        if src_num in chunk_valid_pages:
+            valid_p = chunk_valid_pages[src_num]
+            if page_str is None:
+                is_valid = True
+            else:
+                p_str_clean = str(page_str).strip()
+                if valid_p == "Unknown" or p_str_clean == valid_p:
+                    is_valid = True
+                elif citation_sources_map:
+                    all_pages = []
+                    for c_data in citation_sources_map.values():
+                        all_pages.extend([str(p).strip() for p in c_data.get("pages", [])])
+                    if p_str_clean in all_pages:
+                        is_valid = True
+                        
+        if not is_valid and src_num in doc_valid_pages:
+            valid_pages = doc_valid_pages[src_num]
+            if page_str is None:
+                is_valid = True
+            else:
+                p_str_clean = str(page_str).strip()
+                if not valid_pages or "Unknown" in valid_pages or p_str_clean in valid_pages:
+                    is_valid = True
+                    
+        if is_valid:
+            valid_citations += 1
+        else:
+            invalid_citations += 1
+            start_span, end_span = match.span()
+            sanitized_answer = sanitized_answer[:start_span] + sanitized_answer[end_span:]
+            
+    if invalid_citations > 0:
+        sanitized_answer = re.sub(r'\s+([.,;:!?])', r'\1', sanitized_answer)
+        sanitized_answer = re.sub(r'[ \t]{2,}', ' ', sanitized_answer)
+        
+    v_time = time.perf_counter() - start_v
+    
+    record_metric("citations", "total_citations", total_citations)
+    record_metric("citations", "valid_citations", valid_citations)
+    record_metric("citations", "invalid_citations", invalid_citations)
+    record_metric("citations", "sanitized_citations", invalid_citations)
+    record_metric("citations", "verification_events", 1)
+    try:
+        with _metrics_lock:
+            GLOBAL_METRICS["citations"]["total_verification_latency"] += v_time
+    except Exception:
+        pass
+        
+    stats = {
+        "total_citations": total_citations,
+        "valid_citations": valid_citations,
+        "invalid_citations": invalid_citations,
+        "sanitized_citations": invalid_citations,
+        "verification_time": round(v_time, 6)
+    }
+    
+    return sanitized_answer, stats
+
+# ================================
 # FLASK APP
 # ================================
 # Flask app is created immediately so Gunicorn can bind to the port
@@ -342,6 +447,14 @@ GLOBAL_METRICS = {
         "http_429_count": 0,
         "generation_failures": 0,
     },
+    "citations": {
+        "total_citations": 0,
+        "valid_citations": 0,
+        "invalid_citations": 0,
+        "sanitized_citations": 0,
+        "verification_events": 0,
+        "total_verification_latency": 0.0
+    },
     "timing": {
         "total_retrieval_latency": 0.0,
         "total_generation_latency": 0.0,
@@ -373,9 +486,17 @@ def get_metrics():
                 "retrieval": GLOBAL_METRICS["retrieval"],
                 "cache": GLOBAL_METRICS["cache"],
                 "generation": GLOBAL_METRICS["generation"],
+                "citations": {
+                    "total_citations": GLOBAL_METRICS["citations"]["total_citations"],
+                    "valid_citations": GLOBAL_METRICS["citations"]["valid_citations"],
+                    "invalid_citations": GLOBAL_METRICS["citations"]["invalid_citations"],
+                    "sanitized_citations": GLOBAL_METRICS["citations"]["sanitized_citations"],
+                    "verification_events": GLOBAL_METRICS["citations"]["verification_events"]
+                },
                 "timing": {
                     "avg_retrieval_latency": round(GLOBAL_METRICS["timing"]["total_retrieval_latency"] / max(1, GLOBAL_METRICS["timing"]["retrieval_events"]), 3),
                     "avg_generation_latency": round(GLOBAL_METRICS["timing"]["total_generation_latency"] / max(1, GLOBAL_METRICS["timing"]["generation_events"]), 3),
+                    "avg_verification_latency": round(GLOBAL_METRICS["citations"]["total_verification_latency"] / max(1, GLOBAL_METRICS["citations"]["verification_events"]), 6),
                     "avg_total_latency": round(GLOBAL_METRICS["timing"]["total_request_latency"] / max(1, GLOBAL_METRICS["system"]["total_requests"]), 3)
                 }
             }
@@ -572,11 +693,15 @@ def ask():
             grounded = fallback_sentence not in answer
             
             if grounded:
+                answer, citation_stats = verify_and_sanitize_citations(answer, sources_list, citation_sources_map)
                 add_to_session(user_id, "user", query)
                 add_to_session(user_id, "assistant", answer)
+            else:
+                citation_stats = {"total_citations": 0, "valid_citations": 0, "invalid_citations": 0, "sanitized_citations": 0, "verification_time": 0.0}
         else:
             record_metric("generation", "fast_trip_count", 1)
             generation_time = 0
+            citation_stats = {"total_citations": 0, "valid_citations": 0, "invalid_citations": 0, "sanitized_citations": 0, "verification_time": 0.0}
             print("[LLM] Generation skipped (Fast-trip)")
             
         response_time = time.perf_counter() - start_time
@@ -587,6 +712,7 @@ def ask():
             "result": answer,
             "sources": sources_list,
             "citation_sources": citation_sources,
+            "citation_stats": citation_stats,
             "retrieved_chunks": len(sources_list),
             "unique_documents": len(unique_docs_set),
             "response_time": round(response_time, 3),

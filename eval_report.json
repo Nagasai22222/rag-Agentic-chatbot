@@ -1,27 +1,27 @@
 {
   "evaluation_version": "phase-8",
-  "timestamp": 1786790590.0998747,
+  "timestamp": 1787303343.2416368,
   "total_tests": 32,
-  "pass": 7,
+  "pass": 6,
   "fail": 2,
   "threshold_edge_cases": 1,
   "test_data_errors": 0,
   "evaluator_errors": 0,
   "blocked_by_rate_limit": 0,
-  "api_errors": 22,
+  "api_errors": 23,
   "timeouts": 0,
   "manual_review": 0,
   "metrics": {
     "retrieval": {
-      "attempts": 10,
-      "evaluated": 10,
-      "successes": 1,
+      "attempts": 9,
+      "evaluated": 9,
+      "successes": 0,
       "failures": 9,
       "blocked": 0
     },
     "grounding": {
-      "supported_attempts": 4,
-      "supported_successes": 1,
+      "supported_attempts": 3,
+      "supported_successes": 0,
       "unsupported_attempts": 6,
       "correct_rejections": 6,
       "blocked": 0
@@ -39,19 +39,17 @@
     },
     "performance": {
       "retrieval_times": [
-        0.272,
-        0.018,
-        0.02,
-        0.018,
-        0.016,
-        0.019,
-        0.012,
-        0.013,
-        0.011,
-        0.02
+        0.023,
+        0.028,
+        0.024,
+        0.027,
+        0.027,
+        0.024,
+        0.024,
+        0.097,
+        0.024
       ],
       "generation_times": [
-        0.625,
         0,
         0,
         0,
@@ -63,22 +61,21 @@
         0
       ],
       "response_times": [
-        0.8983078002929688,
-        0.01981663703918457,
-        0.02016162872314453,
-        0.019323348999023438,
-        0.017544031143188477,
-        0.019803285598754883,
-        0.013100385665893555,
-        0.014380693435668945,
-        0.012210369110107422,
-        0.021600961685180664
+        0.025801897048950195,
+        0.030500411987304688,
+        0.02564215660095215,
+        0.028919219970703125,
+        0.030170202255249023,
+        0.026142597198486328,
+        0.026223421096801758,
+        0.10041975975036621,
+        0.026633024215698242
       ]
     }
   },
   "averages": {
-    "avg_generation_time": 0.0625,
-    "avg_retrieval_time": 0.041900000000000014
+    "avg_generation_time": 0.0,
+    "avg_retrieval_time": 0.03311111111111112
   },
   "failures": [],
   "blocked_tests": []

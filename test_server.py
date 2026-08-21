@@ -57,6 +57,90 @@ def mock_success(*args, **kwargs):
         content = "This is a mathematically verified mock answer."
     return MockRes()
 
+def test_citation_verification(metrics):
+    print("\n--- PHASE 13 CITATION VERIFICATION TESTS ---")
+    from llama import verify_and_sanitize_citations
+    
+    mock_sources = [
+        {"chunk": 1, "source": "rag_doc.pdf", "page": 5},
+        {"chunk": 2, "source": "rag_doc.pdf", "page": 8},
+        {"chunk": 3, "source": "ai_basics.pdf", "page": 12}
+    ]
+    mock_citation_map = {
+        "rag_doc.pdf": {"id": 1, "source": "rag_doc.pdf", "pages": [5, 8], "chunks": [1, 2]},
+        "ai_basics.pdf": {"id": 2, "source": "ai_basics.pdf", "pages": [12], "chunks": [3]}
+    }
+    
+    # 1. Valid source + valid page -> preserved
+    ans1 = "RAG combines retrieval and generation [Source 1, Page 5]."
+    san1, stats1 = verify_and_sanitize_citations(ans1, mock_sources, mock_citation_map)
+    assert san1 == ans1, f"Valid citation must be preserved. Got: {san1}"
+    assert stats1["valid_citations"] == 1
+    assert stats1["invalid_citations"] == 0
+    print("  -> Case 1 (Valid source + page): PASS")
+
+    # 2. Valid source without page -> preserved
+    ans2 = "Fine-tuning updates weights [Source 1]."
+    san2, stats2 = verify_and_sanitize_citations(ans2, mock_sources, mock_citation_map)
+    assert san2 == ans2, f"Valid source without page must be preserved. Got: {san2}"
+    assert stats2["valid_citations"] == 1
+    print("  -> Case 2 (Valid source without page): PASS")
+
+    # 3. Invalid source index -> sanitized
+    ans3 = "Embeddings are vectors [Source 99, Page 1]."
+    san3, stats3 = verify_and_sanitize_citations(ans3, mock_sources, mock_citation_map)
+    assert "[Source 99" not in san3, f"Invalid source index must be sanitized. Got: {san3}"
+    assert "Embeddings are vectors." in san3
+    assert stats3["invalid_citations"] == 1
+    print("  -> Case 3 (Invalid source index): PASS")
+
+    # 4. Invalid page number -> sanitized
+    ans4 = "Attention is all you need [Source 1, Page 99]."
+    san4, stats4 = verify_and_sanitize_citations(ans4, mock_sources, mock_citation_map)
+    assert "[Source 1, Page 99]" not in san4, f"Invalid page number must be sanitized. Got: {san4}"
+    assert stats4["invalid_citations"] == 1
+    print("  -> Case 4 (Invalid page number): PASS")
+
+    # 5. Multiple valid citations -> all preserved
+    ans5 = "RAG [Source 1, Page 5] and Fine-tuning [Source 3, Page 12] work well."
+    san5, stats5 = verify_and_sanitize_citations(ans5, mock_sources, mock_citation_map)
+    assert san5 == ans5, f"Multiple valid citations must be preserved. Got: {san5}"
+    assert stats5["valid_citations"] == 2
+    print("  -> Case 5 (Multiple valid citations): PASS")
+
+    # 6. Mixed valid/invalid citations -> only invalid sanitized
+    ans6 = "RAG [Source 1, Page 5] is good, but fake [Source 99, Page 1] is bad."
+    san6, stats6 = verify_and_sanitize_citations(ans6, mock_sources, mock_citation_map)
+    assert "[Source 1, Page 5]" in san6
+    assert "[Source 99" not in san6
+    assert stats6["valid_citations"] == 1
+    assert stats6["invalid_citations"] == 1
+    print("  -> Case 6 (Mixed valid/invalid citations): PASS")
+
+    # 7. Hallucinated citation -> sanitized
+    ans7 = "Hallucinated statement [Source 5, Page 20]."
+    san7, stats7 = verify_and_sanitize_citations(ans7, mock_sources, mock_citation_map)
+    assert "[Source 5" not in san7
+    assert stats7["invalid_citations"] == 1
+    print("  -> Case 7 (Hallucinated citation): PASS")
+
+    # 8. Citation-free response -> unchanged
+    ans8 = "This is a direct answer with no citations."
+    san8, stats8 = verify_and_sanitize_citations(ans8, mock_sources, mock_citation_map)
+    assert san8 == ans8
+    assert stats8["total_citations"] == 0
+    print("  -> Case 8 (Citation-free response): PASS")
+
+    # 9. Citation metrics verification under /metrics
+    cit_metrics = metrics.get('citations', {})
+    assert 'total_citations' in cit_metrics, "Metrics must include citation telemetry"
+    print(f"  -> Case 9 (Citation metrics in /metrics): {cit_metrics}")
+
+    # 10. Verification latency benchmarked
+    print(f"  -> Case 10 (Measured verification latency): {stats1['verification_time']*1000:.4f} ms")
+
+    print("\n# ALL PHASE 13 CITATION TESTS SUCCEEDED!")
+
 if __name__ == "__main__":
     print("--- PHASE 10 CACHE TESTS ---")
     
@@ -130,11 +214,6 @@ if __name__ == "__main__":
     gen_metrics = metrics.get('generation', {})
     cache_metrics = metrics.get('cache', {})
     
-    # We ran exactly: 
-    # 1 miss, 1 exact hit, 1 semantic hit (miss because strict), 
-    # 2 follow up (miss, hit), 2 unsupported (miss, miss) -> Fast trips!
-    # 1 429 trap, 1 retry cache miss. 1 kb version trap.
-    
     print("\n--- PHASE 11 OBSERVABILITY REPORT ---")
     print(f"   Uptime: {sys_metrics.get('uptime_seconds')}s")
     print(f"   Total Requests Evaluated: {sys_metrics.get('total_requests')}")
@@ -154,3 +233,6 @@ if __name__ == "__main__":
     assert gen_metrics.get('fast_trip_count') >= 1, "Fast trips must accumulate"
     assert gen_metrics.get('fallback_success_count') >= 1, "Fallback success trap must aggregate"
     assert gen_metrics.get('fallback_failure_count') >= 1, "Ultimate failure bounds must record"
+
+    test_citation_verification(metrics)
+

@@ -137,6 +137,10 @@ def execute_eval():
                         metrics["citations"]["citations_present"] += 1
                     if resp_data.get('citation_sources'):
                         metrics["citations"]["valid_sources"] += 1
+                    c_stats = resp_data.get('citation_stats', {})
+                    if c_stats:
+                        metrics["citations"]["total_verified"] = metrics["citations"].get("total_verified", 0) + c_stats.get("valid_citations", 0)
+                        metrics["citations"]["total_sanitized"] = metrics["citations"].get("total_sanitized", 0) + c_stats.get("sanitized_citations", 0)
                         
                 # Basic validation
                 pass_grounding = (is_grounded == exp_grounded)
