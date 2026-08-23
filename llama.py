@@ -2,11 +2,63 @@ import os
 import time
 import threading
 import warnings
+import logging
+import hmac
+from collections import deque
 
 from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
 import re
+
+# --- Logging Setup ---
+logger = logging.getLogger("rag_chatbot")
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+logger.setLevel(logging.INFO)
+
+# --- Configuration Constants & Environment Overrides ---
+MAX_QUERY_LENGTH = int(os.environ.get("MAX_QUERY_LENGTH", 1000))
+MAX_USER_ID_LENGTH = int(os.environ.get("MAX_USER_ID_LENGTH", 128))
+ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "*")
+METRICS_AUTH_TOKEN = os.environ.get("METRICS_AUTH_TOKEN", None)
+RATE_LIMIT_WINDOW = int(os.environ.get("RATE_LIMIT_WINDOW", 60)) # seconds
+RATE_LIMIT_MAX_REQUESTS = int(os.environ.get("RATE_LIMIT_MAX_REQUESTS", 30))
+MAX_TRACKED_RATE_LIMIT_CLIENTS = 1000
+
+# --- Rate Limiter State ---
+_rate_limit_lock = threading.Lock()
+_rate_limit_store = {}
+
+def is_rate_limited(client_id):
+    now = time.time()
+    with _rate_limit_lock:
+        timestamps = _rate_limit_store.get(client_id)
+        if timestamps is None:
+            if len(_rate_limit_store) >= MAX_TRACKED_RATE_LIMIT_CLIENTS:
+                expired_keys = [k for k, ts in _rate_limit_store.items() 
+                                if not ts or (now - ts[-1]) > RATE_LIMIT_WINDOW]
+                for k in expired_keys:
+                    del _rate_limit_store[k]
+                while len(_rate_limit_store) >= MAX_TRACKED_RATE_LIMIT_CLIENTS:
+                    oldest_k = next(iter(_rate_limit_store))
+                    del _rate_limit_store[oldest_k]
+
+            timestamps = deque()
+            _rate_limit_store[client_id] = timestamps
+
+        while timestamps and (now - timestamps[0]) > RATE_LIMIT_WINDOW:
+            timestamps.popleft()
+
+        if len(timestamps) >= RATE_LIMIT_MAX_REQUESTS:
+            retry_after = int(RATE_LIMIT_WINDOW - (now - timestamps[0])) + 1
+            return True, max(1, retry_after)
+
+        timestamps.append(now)
+        return False, 0
 
 # --- Session Memory Configuration & Synchronization ---
 MAX_HISTORY_TURNS = 6
@@ -363,7 +415,44 @@ def verify_and_sanitize_citations(answer, sources_list, citation_sources_map=Non
 # right away — before any heavy ML models are loaded.
 
 app = Flask(__name__)
-CORS(app)
+app.config['MAX_CONTENT_LENGTH'] = 1 * 1024 * 1024  # 1 MB maximum payload limit
+app.config['DEBUG'] = False
+app.config['TESTING'] = False
+
+if ALLOWED_ORIGINS == "*":
+    CORS(app, resources={r"/*": {"origins": "*"}})
+else:
+    origins_list = [o.strip() for o in ALLOWED_ORIGINS.split(",") if o.strip()]
+    CORS(app, resources={r"/*": {"origins": origins_list}})
+
+@app.after_request
+def add_security_headers(response):
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    return response
+
+@app.errorhandler(413)
+def request_entity_too_large(error):
+    return jsonify({
+        "error": "payload_too_large",
+        "message": "Request payload exceeds maximum allowed size of 1 MB."
+    }), 413
+
+@app.errorhandler(400)
+def bad_request_error(error):
+    return jsonify({
+        "error": "bad_request",
+        "message": "The request body was malformed or missing required parameters."
+    }), 400
+
+@app.errorhandler(500)
+def internal_server_error(error):
+    return jsonify({
+        "error": "server_error",
+        "message": "An internal server error occurred."
+    }), 500
 
 # ================================
 # FINAL RAG PROMPT
@@ -581,6 +670,10 @@ def record_metric(category, key, increment=1):
 
 @app.route("/metrics", methods=["GET"])
 def get_metrics():
+    if METRICS_AUTH_TOKEN:
+        token = request.headers.get("X-Metrics-Token", "")
+        if not token or not hmac.compare_digest(token, METRICS_AUTH_TOKEN):
+            return jsonify({"error": "unauthorized", "message": "Invalid or missing metrics authentication token."}), 401
     try:
         with _metrics_lock:
             response = {
@@ -639,18 +732,71 @@ def health():
             "details": _INIT_ERROR
         }), 503
 
+@app.route("/ready", methods=["GET"])
+def ready():
+    components, error = get_rag_components()
+    if components is not None and error is None:
+        return jsonify({
+            "status": "ready",
+            "rag_initialized": True
+        }), 200
+    else:
+        return jsonify({
+            "status": "not_ready",
+            "rag_initialized": False,
+            "error": error or "System not initialized"
+        }), 503
 
 @app.route("/ask", methods=["POST"])
 def ask():
-    data = request.get_json()
-    if not data:
-        return jsonify({"error": "No JSON received"}), 400
+    try:
+        data = request.get_json(silent=True)
+    except Exception:
+        data = None
 
-    user_id = data.get("userId", "default_user")
-    query = data.get("query", "").strip()
+    if not isinstance(data, dict):
+        return jsonify({"error": "bad_request", "message": "Valid JSON request body required"}), 400
 
+    raw_user_id = data.get("userId", "default_user")
+    if not isinstance(raw_user_id, str):
+        return jsonify({"error": "bad_request", "message": "userId must be a string"}), 400
+
+    if len(raw_user_id) > MAX_USER_ID_LENGTH:
+        return jsonify({
+            "error": "bad_request",
+            "message": f"userId exceeds maximum length of {MAX_USER_ID_LENGTH} characters."
+        }), 400
+
+    sanitized_user_id = re.sub(r'[^a-zA-Z0-9_\-\.]', '', raw_user_id)
+    user_id = sanitized_user_id if sanitized_user_id else "default_user"
+
+    raw_query = data.get("query")
+    if not raw_query or not isinstance(raw_query, str):
+        return jsonify({"error": "bad_request", "message": "Query parameter is required and must be a string"}), 400
+
+    query = raw_query.strip()
     if not query:
-        return jsonify({"error": "Query required"}), 400
+        return jsonify({"error": "bad_request", "message": "Query parameter cannot be empty"}), 400
+
+    if len(query) > MAX_QUERY_LENGTH:
+        return jsonify({
+            "error": "bad_request",
+            "message": f"Query exceeds maximum length of {MAX_QUERY_LENGTH} characters."
+        }), 400
+
+    client_ip = request.remote_addr or "unknown"
+    client_id = f"{client_ip}:{user_id}"
+
+    limited, retry_after = is_rate_limited(client_id)
+    if limited:
+        record_metric("generation", "http_429_count", 1)
+        resp = jsonify({
+            "error": "rate_limit_exceeded",
+            "message": f"Too many requests. Please try again in {retry_after} seconds.",
+            "retry_after": retry_after
+        })
+        resp.headers["Retry-After"] = str(retry_after)
+        return resp, 429
 
     components, error = get_rag_components()
     if error:
@@ -887,12 +1033,20 @@ def ask():
 
 @app.route("/reset", methods=["POST"])
 def reset():
-    data = request.json or {}
+    try:
+        data = request.get_json(silent=True) or {}
+    except Exception:
+        data = {}
+
     user_id = data.get("userId")
-    if user_id:
-        with _session_lock:
-            GLOBAL_SESSIONS.pop(user_id, None)
-        print(f"[SESSION] Cleared memory for {user_id}")
+    if user_id and isinstance(user_id, str):
+        if len(user_id) > MAX_USER_ID_LENGTH:
+            return jsonify({"error": "bad_request", "message": f"userId exceeds maximum length of {MAX_USER_ID_LENGTH} characters."}), 400
+        sanitized_user_id = re.sub(r'[^a-zA-Z0-9_\-\.]', '', user_id)
+        if sanitized_user_id:
+            with _session_lock:
+                GLOBAL_SESSIONS.pop(sanitized_user_id, None)
+            logger.info(f"[SESSION] Cleared memory for {sanitized_user_id}")
     return jsonify({"status": "success", "message": "Session reset initialized."})
 
 

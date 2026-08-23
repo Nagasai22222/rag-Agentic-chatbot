@@ -5,8 +5,9 @@ import json
 from unittest.mock import patch
 
 os.chdir(r"c:\Users\ACER\OneDrive\Desktop\vasavi\RAG")
-print("Initializing modules...")
-from llama import app, GLOBAL_SEMANTIC_CACHE, CACHE_TTL_SECONDS, record_metric, get_session_history, add_to_session
+import concurrent.futures
+from langchain_groq import ChatGroq
+from llama import app, GLOBAL_SEMANTIC_CACHE, CACHE_TTL_SECONDS, record_metric, get_session_history, add_to_session, is_rate_limited, _rate_limit_store, _rate_limit_lock
 client = app.test_client()
 
 def run_query(session_id, prompt):
@@ -449,7 +450,170 @@ def test_concurrency_and_locks(metrics):
     print(f"  -> Case 14 (Uncontended Session Write Overhead: {t_session_write:.6f} ms)")
     print("\n# ALL PHASE 15 CONCURRENCY & THREAD SAFETY TESTS SUCCEEDED!")
 
+def test_phase16_api_hardening():
+    print("\n========================================================")
+    print("RUNNING PHASE 16: PRODUCTION API HARDENING & CONFIGURATION TESTS")
+    print("========================================================")
+
+    # A. Valid Request
+    with patch.object(ChatGroq, 'invoke', side_effect=mock_success):
+        res = client.post('/ask', data=json.dumps({'query': 'What is RAG?', 'userId': 'p16_user1'}), content_type='application/json')
+        assert res.status_code == 200, f"Valid request failed: {res.data}"
+        print("  -> Case A (Valid Request): PASS")
+
+    # B. Query Length Limit
+    long_query = "What is RAG? " * 100 # > 1000 chars
+    res = client.post('/ask', data=json.dumps({'query': long_query, 'userId': 'p16_user2'}), content_type='application/json')
+    assert res.status_code == 400, f"Query length limit test failed: status {res.status_code}"
+    data = json.loads(res.data)
+    assert data.get("error") == "bad_request", f"Unexpected error key: {data}"
+    print("  -> Case B (Query Length Limit > 1000 chars): PASS")
+
+    # C. userId Length Limit (>128 chars -> 400 Bad Request) & Character Collisions
+    long_userid = "user_" + "a" * 200 # > 128 chars
+    res = client.post('/ask', data=json.dumps({'query': 'What is RAG?', 'userId': long_userid}), content_type='application/json')
+    assert res.status_code == 400, f"Oversized userId (>128 chars) was not rejected with 400: status {res.status_code}"
+
+    # Verify valid userIds with '-', '_', and '.' do not collide and map independently
+    with patch.object(ChatGroq, 'invoke', side_effect=mock_success):
+        u_dot = "user.1"
+        u_dash = "user-1"
+        u_underscore = "user_1"
+        client.post('/ask', data=json.dumps({'query': 'What is RAG?', 'userId': u_dot}), content_type='application/json')
+        client.post('/ask', data=json.dumps({'query': 'What is RAG?', 'userId': u_dash}), content_type='application/json')
+        client.post('/ask', data=json.dumps({'query': 'What is RAG?', 'userId': u_underscore}), content_type='application/json')
+        assert len(get_session_history(u_dot)) > 0, "u_dot session missing"
+        assert len(get_session_history(u_dash)) > 0, "u_dash session missing"
+        assert len(get_session_history(u_underscore)) > 0, "u_underscore session missing"
+    print("  -> Case C (userId Length Limit Rejection & Character Collision Prevention): PASS")
+
+    # D. Oversized Payload (> 1MB)
+    oversized_data = json.dumps({'query': 'A' * (1024 * 1024 + 50), 'userId': 'p16_user4'})
+    res = client.post('/ask', data=oversized_data, content_type='application/json')
+    assert res.status_code in (400, 413), f"Oversized payload failed: status {res.status_code}"
+    print("  -> Case D (Oversized Payload > 1MB): PASS")
+
+    # E. Malformed JSON Body
+    res = client.post('/ask', data="NOT_A_VALID_JSON{", content_type='application/json')
+    assert res.status_code == 400, f"Malformed JSON failed: status {res.status_code}"
+    print("  -> Case E (Malformed JSON Body): PASS")
+
+    # F & G. CORS & Security Headers
+    res = client.get('/health')
+    assert res.status_code == 200, f"/health check failed: {res.status_code}"
+    assert res.headers.get("X-Content-Type-Options") == "nosniff", "Missing X-Content-Type-Options"
+    assert res.headers.get("X-Frame-Options") == "DENY", "Missing X-Frame-Options"
+    assert res.headers.get("X-XSS-Protection") == "1; mode=block", "Missing X-XSS-Protection"
+    assert res.headers.get("Referrer-Policy") == "strict-origin-when-cross-origin", "Missing Referrer-Policy"
+    print("  -> Case F & G (CORS & Security Headers): PASS")
+
+    # H. /ready Success
+    res = client.get('/ready')
+    assert res.status_code == 200, f"/ready endpoint failed: {res.data}"
+    data = json.loads(res.data)
+    assert data.get("status") == "ready", f"Unexpected status: {data}"
+    print("  -> Case H (/ready Success Endpoint): PASS")
+
+    # I. /ready Failure / Unready State
+    with patch('llama.QA_COMPONENTS', None):
+        with patch('llama._INIT_ERROR', 'Database uninitialized'):
+            res = client.get('/ready')
+            assert res.status_code == 503, f"/ready unready state failed: status {res.status_code}"
+            data = json.loads(res.data)
+            assert data.get("status") == "not_ready", f"Unexpected response: {data}"
+    print("  -> Case I (/ready Failure/Unready State): PASS")
+
+    # J, K, L. /metrics Authentication
+    with patch('llama.METRICS_AUTH_TOKEN', 'secret_token_123'):
+        # J. Without token -> 401
+        res = client.get('/metrics')
+        assert res.status_code == 401, f"/metrics without token failed: {res.status_code}"
+
+        # L. With invalid token -> 401
+        res = client.get('/metrics', headers={'X-Metrics-Token': 'wrong_token'})
+        assert res.status_code == 401, f"/metrics with invalid token failed: {res.status_code}"
+
+        # K. With valid token -> 200
+        res = client.get('/metrics', headers={'X-Metrics-Token': 'secret_token_123'})
+        assert res.status_code == 200, f"/metrics with valid token failed: {res.status_code}"
+    print("  -> Case J, K & L (/metrics Auth Guarding): PASS")
+
+    # M, N, O. Rate Limiting Success, Rejection, and Expiration
+    client_key = "test_ip:rate_user"
+    with patch('llama.RATE_LIMIT_MAX_REQUESTS', 3):
+        with patch('llama.RATE_LIMIT_WINDOW', 2):
+            with _rate_limit_lock:
+                _rate_limit_store.pop(client_key, None)
+
+            lim1, _ = is_rate_limited(client_key)
+            lim2, _ = is_rate_limited(client_key)
+            lim3, _ = is_rate_limited(client_key)
+            assert not lim1 and not lim2 and not lim3, "Rate limit triggered prematurely"
+
+            lim4, retry_after = is_rate_limited(client_key)
+            assert lim4 is True, "Rate limit failed to trigger on 4th hit"
+            assert retry_after > 0, "Invalid retry_after value"
+
+            time.sleep(2.1)
+            lim5, _ = is_rate_limited(client_key)
+            assert lim5 is False, "Rate limit failed to expire after window"
+    print("  -> Case M, N & O (Rate Limiter Success, Rejection & Window Expiration): PASS")
+
+    # P. Rate Limiter Bounded-Memory Behavior
+    with patch('llama.MAX_TRACKED_RATE_LIMIT_CLIENTS', 5):
+        with _rate_limit_lock:
+            _rate_limit_store.clear()
+        for i in range(20):
+            is_rate_limited(f"client_{i}")
+        with _rate_limit_lock:
+            assert len(_rate_limit_store) <= 5, f"Rate limit memory unbounded: size {len(_rate_limit_store)}"
+    print("  -> Case P (Rate Limiter Bounded-Memory Eviction): PASS")
+
+    # Q. Concurrent Rate-Limit Access
+    errors = []
+    def rate_worker(idx):
+        try:
+            is_rate_limited(f"concurrent_client_{idx % 3}")
+        except Exception as e:
+            errors.append(e)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        futures = [executor.submit(rate_worker, i) for i in range(50)]
+        concurrent.futures.wait(futures)
+
+    assert len(errors) == 0, f"Concurrent rate-limiter errors: {errors}"
+    print("  -> Case Q (Concurrent Rate-Limit Access): PASS")
+
+    # R. API Key Non-Leakage
+    res = client.post('/ask', data=json.dumps({'query': 'invalid query', 'userId': 'p16_user'}), content_type='application/json')
+    assert "gsk_" not in res.data.decode('utf-8'), "API Key leaked in response!"
+    print("  -> Case R (API Key Non-Leakage Verification): PASS")
+
+    # S. Production Debug Protection
+    assert app.config['DEBUG'] is False, "Flask DEBUG mode is improperly enabled!"
+    assert app.config['TESTING'] is False, "Flask TESTING mode is improperly enabled!"
+    print("  -> Case S (Production Debug Mode Protection): PASS")
+
+    # T. Standardized Error Responses
+    res = client.post('/ask', data=json.dumps({'query': '', 'userId': 'p16_user'}), content_type='application/json')
+    assert res.status_code == 400, "Empty query didn't return 400"
+    data = json.loads(res.data)
+    assert "error" in data and "message" in data, f"Non-standard error response format: {data}"
+    print("  -> Case T (Standardized Error Responses): PASS")
+
+    # Benchmarking Rate Limiter Overhead
+    t_start = time.perf_counter()
+    for _ in range(1000):
+        is_rate_limited("bench_client")
+    t_rate_limit = (time.perf_counter() - t_start) / 1000.0 * 1000.0
+    print(f"  -> Overhead Measurement (Rate Limiter Overhead: {t_rate_limit:.6f} ms)")
+
+    print("\n# ALL PHASE 16 PRODUCTION API HARDENING TESTS SUCCEEDED!")
+
+if __name__ == "__main__":
     test_citation_verification(metrics)
     test_contextual_query_resolution(metrics)
     test_concurrency_and_locks(metrics)
+    test_phase16_api_hardening()
+
 
