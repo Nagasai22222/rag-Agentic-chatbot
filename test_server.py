@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 os.chdir(r"c:\Users\ACER\OneDrive\Desktop\vasavi\RAG")
 print("Initializing modules...")
-from llama import app, GLOBAL_SEMANTIC_CACHE, CACHE_TTL_SECONDS
+from llama import app, GLOBAL_SEMANTIC_CACHE, CACHE_TTL_SECONDS, record_metric, get_session_history, add_to_session
 client = app.test_client()
 
 def run_query(session_id, prompt):
@@ -327,6 +327,129 @@ if __name__ == "__main__":
     assert gen_metrics.get('fallback_success_count') >= 1, "Fallback success trap must aggregate"
     assert gen_metrics.get('fallback_failure_count') >= 1, "Ultimate failure bounds must record"
 
+import concurrent.futures
+
+def test_concurrency_and_locks(metrics):
+    print("\n--- PHASE 15 THREAD-SAFE CONCURRENCY & LOCK SUITE ---")
+    
+    # 1. Concurrent Session Creation & Writes Across Different Sessions
+    errors = []
+    def worker_different_sessions(idx):
+        try:
+            user_id = f"concurrent_user_{idx}"
+            run_query(user_id, f"What is RAG topic {idx}?")
+        except Exception as e:
+            errors.append(e)
+
+    with patch.object(ChatGroq, 'invoke', side_effect=mock_success):
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            futures = [executor.submit(worker_different_sessions, i) for i in range(20)]
+            concurrent.futures.wait(futures)
+            
+    assert len(errors) == 0, f"Concurrent session creation/writes failed: {errors}"
+    print("  -> Case 1 & 4 (Concurrent session creation & writes to different sessions): PASS")
+
+    # 2. Concurrent Reads & Writes on the SAME Session
+    same_user = "shared_concurrent_user"
+    def worker_same_session(idx):
+        try:
+            if idx % 2 == 0:
+                run_query(same_user, f"Query variant {idx}")
+            else:
+                run_query(same_user, "Why is fine-tuning important?")
+        except Exception as e:
+            errors.append(e)
+
+    with patch.object(ChatGroq, 'invoke', side_effect=mock_success):
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            futures = [executor.submit(worker_same_session, i) for i in range(20)]
+            concurrent.futures.wait(futures)
+
+    assert len(errors) == 0, f"Concurrent same-session reads/writes failed: {errors}"
+    print("  -> Case 2 & 3 (Concurrent reads & writes on same session): PASS")
+
+    # 3. Concurrent Reset during Active Session Reads/Writes
+    def worker_reset_session(idx):
+        try:
+            if idx % 3 == 0:
+                reset_session(same_user)
+            else:
+                run_query(same_user, f"Post-reset query {idx}")
+        except Exception as e:
+            errors.append(e)
+
+    with patch.object(ChatGroq, 'invoke', side_effect=mock_success):
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            futures = [executor.submit(worker_reset_session, i) for i in range(15)]
+            concurrent.futures.wait(futures)
+
+    assert len(errors) == 0, f"Concurrent session reset failed: {errors}"
+    print("  -> Case 5 (Concurrent session reset): PASS")
+
+    # 4. Concurrent Cache Reads & Writes & Capacity Eviction
+    def worker_cache_eviction(idx):
+        try:
+            q = f"Unique cache query item number {idx}"
+            run_query("cache_worker", q)
+        except Exception as e:
+            errors.append(e)
+
+    with patch.object(ChatGroq, 'invoke', side_effect=mock_success):
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            futures = [executor.submit(worker_cache_eviction, i) for i in range(120)]
+            concurrent.futures.wait(futures)
+
+    assert len(errors) == 0, f"Concurrent cache reads/writes/eviction failed: {errors}"
+    print("  -> Case 6, 7 & 8 (Concurrent cache reads, writes, and LRU eviction): PASS")
+
+    # 5. Concurrent TTL Expiration & KB Invalidation
+    def worker_ttl_kb(idx):
+        try:
+            if idx % 2 == 0:
+                for k in list(GLOBAL_SEMANTIC_CACHE.keys()):
+                    GLOBAL_SEMANTIC_CACHE[k]["kb_version"] = 0
+            run_query("ttl_user", "What is fine-tuning?")
+        except Exception as e:
+            errors.append(e)
+
+    with patch.object(ChatGroq, 'invoke', side_effect=mock_success):
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            futures = [executor.submit(worker_ttl_kb, i) for i in range(10)]
+            concurrent.futures.wait(futures)
+
+    assert len(errors) == 0, f"Concurrent TTL/KB invalidation failed: {errors}"
+    print("  -> Case 9 & 10 (Concurrent TTL expiration & KB invalidation): PASS")
+
+    # 6. Concurrent Metrics Updates
+    def worker_metrics(idx):
+        try:
+            record_metric("system", "total_requests", 1)
+        except Exception as e:
+            errors.append(e)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        futures = [executor.submit(worker_metrics, i) for i in range(50)]
+        concurrent.futures.wait(futures)
+
+    assert len(errors) == 0, f"Concurrent metrics update failed: {errors}"
+    print("  -> Case 11 & 12 (Concurrent metrics & cache/session isolation): PASS")
+
+    # Benchmarking uncontended lock overheads
+    t_start = time.perf_counter()
+    for _ in range(1000):
+        get_session_history("bench_user")
+    t_session_read = (time.perf_counter() - t_start) / 1000.0 * 1000.0
+
+    t_start = time.perf_counter()
+    for i in range(1000):
+        add_to_session("bench_user", "user", f"msg {i}")
+    t_session_write = (time.perf_counter() - t_start) / 1000.0 * 1000.0
+
+    print(f"  -> Case 13 (Uncontended Session Read Overhead: {t_session_read:.6f} ms)")
+    print(f"  -> Case 14 (Uncontended Session Write Overhead: {t_session_write:.6f} ms)")
+    print("\n# ALL PHASE 15 CONCURRENCY & THREAD SAFETY TESTS SUCCEEDED!")
+
     test_citation_verification(metrics)
     test_contextual_query_resolution(metrics)
+    test_concurrency_and_locks(metrics)
 

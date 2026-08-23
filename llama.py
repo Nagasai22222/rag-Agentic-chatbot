@@ -8,27 +8,37 @@ from flask_cors import CORS
 from dotenv import load_dotenv
 import re
 
-# --- Session Memory Configuration ---
+# --- Session Memory Configuration & Synchronization ---
 MAX_HISTORY_TURNS = 6
 MAX_SESSIONS = 100
 GLOBAL_SESSIONS = {}
+_session_lock = threading.Lock()
 
 def get_session_history(user_id):
-    if user_id not in GLOBAL_SESSIONS:
-        GLOBAL_SESSIONS[user_id] = []
-    
-    # LRU Cleanup
-    if len(GLOBAL_SESSIONS) > MAX_SESSIONS:
-        oldest_key = next(iter(GLOBAL_SESSIONS))
-        del GLOBAL_SESSIONS[oldest_key]
+    with _session_lock:
+        if user_id not in GLOBAL_SESSIONS:
+            GLOBAL_SESSIONS[user_id] = []
         
-    return GLOBAL_SESSIONS[user_id]
+        # LRU Cleanup
+        if len(GLOBAL_SESSIONS) > MAX_SESSIONS and user_id not in GLOBAL_SESSIONS:
+            oldest_key = next(iter(GLOBAL_SESSIONS))
+            del GLOBAL_SESSIONS[oldest_key]
+            
+        return list(GLOBAL_SESSIONS[user_id])
 
 def add_to_session(user_id, role, content):
-    history = get_session_history(user_id)
-    history.append({"role": role, "content": content})
-    if len(history) > MAX_HISTORY_TURNS * 2: # Keep 6 pairs of QA technically
-        GLOBAL_SESSIONS[user_id] = history[-(MAX_HISTORY_TURNS * 2):]
+    with _session_lock:
+        if user_id not in GLOBAL_SESSIONS:
+            GLOBAL_SESSIONS[user_id] = []
+            
+        if len(GLOBAL_SESSIONS) > MAX_SESSIONS and user_id not in GLOBAL_SESSIONS:
+            oldest_key = next(iter(GLOBAL_SESSIONS))
+            del GLOBAL_SESSIONS[oldest_key]
+            
+        history = GLOBAL_SESSIONS[user_id]
+        history.append({"role": role, "content": content})
+        if len(history) > MAX_HISTORY_TURNS * 2: # Keep 6 pairs of QA technically
+            GLOBAL_SESSIONS[user_id] = history[-(MAX_HISTORY_TURNS * 2):]
 
 DOMAIN_QUERY_MAP = {
     "rag": "retrieval augmented generation RAG architecture",
@@ -168,6 +178,7 @@ CACHE_TTL_SECONDS = 3600
 CACHE_SIMILARITY_THRESHOLD = 0.95
 
 GLOBAL_SEMANTIC_CACHE = {}
+_cache_lock = threading.Lock()
 
 def get_kb_version():
     try:
@@ -182,51 +193,63 @@ def cosine_similarity(v1, v2):
     return dot / (n1 * n2) if n1 and n2 else 0
 
 def check_cache(resolved_query, embedder):
+    if not resolved_query:
+        return None
+
+    # Embed query outside the lock so we don't block other threads during model execution
+    query_emb = np.array(embedder.embed_query(resolved_query))
     kb_ver = get_kb_version()
     now = time.time()
     
-    keys_to_delete = [k for k, v in GLOBAL_SEMANTIC_CACHE.items() 
-                      if now - v["timestamp"] > CACHE_TTL_SECONDS or v["kb_version"] != kb_ver]
-    for k in keys_to_delete:
-        del GLOBAL_SEMANTIC_CACHE[k]
-        
-    if not GLOBAL_SEMANTIC_CACHE:
-        return None
-        
-    query_emb = np.array(embedder.embed_query(resolved_query))
-    best_k = None
-    best_sim = -1
-    
-    for k, v in GLOBAL_SEMANTIC_CACHE.items():
-        sim = cosine_similarity(query_emb, v["embedding"])
-        if sim > best_sim:
-            best_sim = sim
-            best_k = k
+    with _cache_lock:
+        keys_to_delete = [k for k, v in GLOBAL_SEMANTIC_CACHE.items() 
+                          if now - v["timestamp"] > CACHE_TTL_SECONDS or v["kb_version"] != kb_ver]
+        for k in keys_to_delete:
+            del GLOBAL_SEMANTIC_CACHE[k]
             
-    if best_sim >= CACHE_SIMILARITY_THRESHOLD and best_k is not None:
-        entry = GLOBAL_SEMANTIC_CACHE.pop(best_k)
-        GLOBAL_SEMANTIC_CACHE[best_k] = entry
-        payload = entry["payload"].copy() # avoid pointer mutating
-        return payload
+        if not GLOBAL_SEMANTIC_CACHE:
+            return None
+            
+        cache_snapshot = list(GLOBAL_SEMANTIC_CACHE.items())
         
-    return None
+        best_k = None
+        best_sim = -1
+        
+        for k, v in cache_snapshot:
+            sim = cosine_similarity(query_emb, v["embedding"])
+            if sim > best_sim:
+                best_sim = sim
+                best_k = k
+                
+        if best_sim >= CACHE_SIMILARITY_THRESHOLD and best_k is not None:
+            if best_k in GLOBAL_SEMANTIC_CACHE:
+                entry = GLOBAL_SEMANTIC_CACHE.pop(best_k)
+                GLOBAL_SEMANTIC_CACHE[best_k] = entry
+                payload = entry["payload"].copy() # avoid pointer mutating
+                return payload
+                
+        return None
 
 def save_to_cache(resolved_query, payload, embedder):
     if not payload.get("grounded") or "error" in payload:
         return
         
-    if len(GLOBAL_SEMANTIC_CACHE) >= MAX_CACHE_ENTRIES:
-        oldest_k = next(iter(GLOBAL_SEMANTIC_CACHE))
-        del GLOBAL_SEMANTIC_CACHE[oldest_k]
-        record_metric("cache", "evictions", 1)
-        
     query_emb = np.array(embedder.embed_query(resolved_query))
-    GLOBAL_SEMANTIC_CACHE[resolved_query] = {
-        "embedding": query_emb,
-        "payload": payload,
-        "timestamp": time.time(),
-        "kb_version": get_kb_version()
-    }
+    kb_ver = get_kb_version()
+    now = time.time()
+    
+    with _cache_lock:
+        if len(GLOBAL_SEMANTIC_CACHE) >= MAX_CACHE_ENTRIES:
+            oldest_k = next(iter(GLOBAL_SEMANTIC_CACHE))
+            del GLOBAL_SEMANTIC_CACHE[oldest_k]
+            record_metric("cache", "evictions", 1)
+            
+        GLOBAL_SEMANTIC_CACHE[resolved_query] = {
+            "embedding": query_emb,
+            "payload": payload,
+            "timestamp": now,
+            "kb_version": kb_ver
+        }
 
 # ================================
 # PHASE 13 CITATION VERIFICATION ENGINE
@@ -867,7 +890,8 @@ def reset():
     data = request.json or {}
     user_id = data.get("userId")
     if user_id:
-        GLOBAL_SESSIONS.pop(user_id, None)
+        with _session_lock:
+            GLOBAL_SESSIONS.pop(user_id, None)
         print(f"[SESSION] Cleared memory for {user_id}")
     return jsonify({"status": "success", "message": "Session reset initialized."})
 
