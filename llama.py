@@ -30,35 +30,113 @@ def add_to_session(user_id, role, content):
     if len(history) > MAX_HISTORY_TURNS * 2: # Keep 6 pairs of QA technically
         GLOBAL_SESSIONS[user_id] = history[-(MAX_HISTORY_TURNS * 2):]
 
-def extract_subject(text):
-    text = text.lower().strip("?.! ")
-    prefixes = ["what is a ", "what is an ", "what is ", "what are ", "explain ", "define ", "tell me about ", "describe "]
-    for p in prefixes:
-        if text.startswith(p):
-            return text[len(p):].strip()
-    return text
+DOMAIN_QUERY_MAP = {
+    "rag": "retrieval augmented generation RAG architecture",
+    "rag?": "retrieval augmented generation RAG architecture",
+    "fine tuning": "fine-tuning model weights parameter adaptation",
+    "fine-tuning": "fine-tuning model weights parameter adaptation",
+    "the ai": "artificial intelligence LLM language models",
+    "ai": "artificial intelligence LLM language models",
+    "vector db": "vector databases embeddings similarity search FAISS",
+    "vector database": "vector databases embeddings similarity search FAISS",
+    "embeddings": "dense vector embeddings representations similarity",
+    "tokenization": "tokenization tokens context window"
+}
 
-def resolve_conversational_query(query, history):
+def extract_context_subject(history):
     if not history:
-        return query
-        
+        return None
+    
     last_user_msg = next((msg["content"] for msg in reversed(history) if msg["role"] == "user"), None)
     if not last_user_msg:
-        return query
+        return None
         
-    subject = extract_subject(last_user_msg)
+    text = last_user_msg.strip()
+    prefixes = [
+        "what is a ", "what is an ", "what is ", "what are ", 
+        "explain ", "define ", "tell me about ", "describe ",
+        "why is ", "how do ", "how does ", "compare ", "summarize "
+    ]
     
-    # Pronouns indicating follow up
-    pattern = r'\b(it|its|they|them|this|that|these|those)\b'
-    
+    text_lower = text.lower().strip("?.! ")
+    subject = text_lower
+    for p in prefixes:
+        if text_lower.startswith(p):
+            subject = text_lower[len(p):].strip("?.! ")
+            break
+            
+    for separator in [" and ", " or ", ",", ";"]:
+        if separator in subject:
+            subject = subject.split(separator)[0].strip()
+
+    words = subject.split()
+    if len(words) <= 5 and subject:
+        return subject
+        
+    return " ".join(words[:5]) if words else None
+
+def resolve_contextual_query(query, history):
+    if not history or not query:
+        return query, False
+
+    subject = extract_context_subject(history)
+    if not subject:
+        return query, False
+
     query_lower = query.lower()
-    if re.search(pattern, query_lower) or "previous" in query_lower or "again" in query_lower:
+
+    # If the history subject is already explicitly present in the query, it is self-contained
+    if subject.lower() in query_lower:
+        return query, False
+
+    pattern = r'\b(it|its|they|them|this|that|these|those)\b'
+    pronoun_match = re.search(pattern, query_lower)
+
+    is_followup_indicator = (
+        pronoun_match is not None or 
+        "previous" in query_lower or 
+        "again" in query_lower or
+        query_lower.startswith("why is") or
+        query_lower.startswith("what are the") or
+        query_lower.startswith("how is") or
+        query_lower.startswith("how are")
+    )
+
+    if not is_followup_indicator:
+        return query, False
+
+    if pronoun_match:
         resolved = re.sub(pattern, subject, query, count=1, flags=re.IGNORECASE)
-        if resolved.lower() == query_lower:
-            resolved = f"{query} ({subject})"
-        return resolved
-        
-    return query
+        if resolved.lower() != query_lower:
+            return resolved, True
+
+    if f"({subject})" not in query and subject not in query_lower:
+        resolved = f"{query} ({subject})"
+        return resolved, True
+
+    return query, False
+
+def expand_domain_query(query):
+    if not query:
+        return query, False
+
+    clean_q = query.lower().strip("?.! ")
+    if clean_q in DOMAIN_QUERY_MAP:
+        expanded = DOMAIN_QUERY_MAP[clean_q]
+        return f"{query} ({expanded})", True
+
+    return query, False
+
+def resolve_and_expand_query(query, history):
+    start_t = time.perf_counter()
+    res_query, is_contextual = resolve_contextual_query(query, history)
+    final_query, is_expanded = expand_domain_query(res_query)
+    res_time = time.perf_counter() - start_t
+    return final_query, is_contextual, is_expanded, res_time
+
+def resolve_conversational_query(query, history):
+    final_q, _, _, _ = resolve_and_expand_query(query, history)
+    return final_q
 
 # ================================
 # ENVIRONMENT
@@ -428,6 +506,12 @@ GLOBAL_METRICS = {
         "successful_requests": 0,
         "errors": 0,
     },
+    "query_resolution": {
+        "total_resolutions": 0,
+        "contextual_resolutions": 0,
+        "domain_expansions": 0,
+        "total_resolution_latency": 0.0
+    },
     "retrieval": {
         "total_chunks_retrieved": 0,
     },
@@ -483,6 +567,11 @@ def get_metrics():
                     "successful_requests": GLOBAL_METRICS["system"]["successful_requests"],
                     "errors": GLOBAL_METRICS["system"]["errors"]
                 },
+                "query_resolution": {
+                    "total_resolutions": GLOBAL_METRICS["query_resolution"]["total_resolutions"],
+                    "contextual_resolutions": GLOBAL_METRICS["query_resolution"]["contextual_resolutions"],
+                    "domain_expansions": GLOBAL_METRICS["query_resolution"]["domain_expansions"]
+                },
                 "retrieval": GLOBAL_METRICS["retrieval"],
                 "cache": GLOBAL_METRICS["cache"],
                 "generation": GLOBAL_METRICS["generation"],
@@ -494,6 +583,7 @@ def get_metrics():
                     "verification_events": GLOBAL_METRICS["citations"]["verification_events"]
                 },
                 "timing": {
+                    "avg_query_resolution_latency": round(GLOBAL_METRICS["query_resolution"]["total_resolution_latency"] / max(1, GLOBAL_METRICS["query_resolution"]["total_resolutions"]), 6),
                     "avg_retrieval_latency": round(GLOBAL_METRICS["timing"]["total_retrieval_latency"] / max(1, GLOBAL_METRICS["timing"]["retrieval_events"]), 3),
                     "avg_generation_latency": round(GLOBAL_METRICS["timing"]["total_generation_latency"] / max(1, GLOBAL_METRICS["timing"]["generation_events"]), 3),
                     "avg_verification_latency": round(GLOBAL_METRICS["citations"]["total_verification_latency"] / max(1, GLOBAL_METRICS["citations"]["verification_events"]), 6),
@@ -545,8 +635,19 @@ def ask():
 
     start_time = time.perf_counter()
     history = get_session_history(user_id)
-    resolved_query = resolve_conversational_query(query, history)
+    resolved_query, is_contextual, is_expanded, resolution_time = resolve_and_expand_query(query, history)
     history_used = (resolved_query != query)
+    
+    record_metric("query_resolution", "total_resolutions", 1)
+    if is_contextual:
+        record_metric("query_resolution", "contextual_resolutions", 1)
+    if is_expanded:
+        record_metric("query_resolution", "domain_expansions", 1)
+    try:
+        with _metrics_lock:
+            GLOBAL_METRICS["query_resolution"]["total_resolution_latency"] += resolution_time
+    except Exception:
+        pass
     
     gen_history = history[-4:] if len(history) > 4 else history
     history_text = "\n".join([f"{msg['role'].title()}: {msg['content']}" for msg in gen_history]) if gen_history else "No previous conversation."
@@ -555,9 +656,13 @@ def ask():
         record_metric("system", "total_requests", 1)
         print(f"\n[QUERY] {resolved_query}")
         
-        # PHASE 10 CACHE LOOKUP
+        # PHASE 10 CACHE LOOKUP (Bypassed for contextual queries to prevent cross-session context contamination)
         cache_start = time.perf_counter()
-        cached_payload = check_cache(resolved_query, components["embeddings"])
+        if not is_contextual:
+            cached_payload = check_cache(resolved_query, components["embeddings"])
+        else:
+            cached_payload = None
+            print("[CACHE] BYPASS (Contextual query relies on session history context)")
         cache_lookup_time = time.perf_counter() - cache_start
         
         if cached_payload is not None:
@@ -718,6 +823,9 @@ def ask():
             "response_time": round(response_time, 3),
             "retrieval_time": round(retrieval_time, 3),
             "generation_time": round(generation_time, 3),
+            "resolution_time": round(resolution_time, 6),
+            "contextual_resolution": is_contextual,
+            "domain_expansion": is_expanded,
             "grounded": grounded,
             "rag_initialized": True,
             "conversation_id": user_id,
@@ -729,8 +837,9 @@ def ask():
             "cache_lookup_time": round(cache_lookup_time, 3)
         }
         
-        # P10: Inject Cache Write Boundary
-        save_to_cache(resolved_query, final_payload, components["embeddings"])
+        # P10: Inject Cache Write Boundary (Bypassed for contextual queries to prevent cross-session context contamination)
+        if not is_contextual:
+            save_to_cache(resolved_query, final_payload, components["embeddings"])
         
         return jsonify(final_payload)
     except Exception as e:

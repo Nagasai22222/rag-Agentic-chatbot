@@ -141,6 +141,99 @@ def test_citation_verification(metrics):
 
     print("\n# ALL PHASE 13 CITATION TESTS SUCCEEDED!")
 
+def test_contextual_query_resolution(metrics):
+    print("\n--- PHASE 14 CONTEXTUAL QUERY RESOLUTION & EXPANSION TESTS ---")
+    from llama import resolve_and_expand_query, expand_domain_query, resolve_contextual_query
+    from langchain_groq import ChatGroq
+
+    # 1. Standalone Query
+    q1, is_c1, is_e1, t1 = resolve_and_expand_query("What is fine-tuning?", [])
+    assert q1 == "What is fine-tuning?", f"Standalone query must be unchanged. Got: {q1}"
+    assert is_c1 == False and is_e1 == False
+    print("  -> Case 1 (Standalone query): PASS")
+
+    # 2. Pronoun Follow-up
+    hist2 = [{"role": "user", "content": "What is fine-tuning?"}, {"role": "assistant", "content": "Fine-tuning adapts weights."}]
+    q2, is_c2, is_e2, t2 = resolve_and_expand_query("Why is it important?", hist2)
+    assert "fine-tuning" in q2.lower(), f"Pronoun 'it' must be replaced with subject. Got: {q2}"
+    assert is_c2 == True
+    print(f"  -> Case 2 (Pronoun follow-up): PASS ('Why is it important?' -> '{q2}')")
+
+    # 3. Context-dependent Follow-up
+    hist3 = [{"role": "user", "content": "Explain prompt engineering."}, {"role": "assistant", "content": "Prompt engineering shapes inputs."}]
+    q3, is_c3, is_e3, t3 = resolve_and_expand_query("What are the key benefits?", hist3)
+    assert "prompt engineering" in q3.lower(), f"Implicit coreference must append subject. Got: {q3}"
+    assert is_c3 == True
+    print(f"  -> Case 3 (Context-dependent follow-up): PASS ('What are the key benefits?' -> '{q3}')")
+
+    # 4. Short Query
+    q4, is_c4, is_e4, t4 = resolve_and_expand_query("RAG?", [])
+    assert "retrieval augmented generation" in q4.lower(), f"Short domain query 'RAG?' must be expanded. Got: {q4}"
+    assert is_e4 == True
+    print(f"  -> Case 4 (Short query expansion): PASS ('RAG?' -> '{q4}')")
+
+    # 5. Already-Complete Query
+    q5, is_c5, is_e5, t5 = resolve_and_expand_query("What are pretrained model weights in deep learning?", [])
+    assert q5 == "What are pretrained model weights in deep learning?", f"Complete query must remain untouched. Got: {q5}"
+    assert is_c5 == False and is_e5 == False
+    print("  -> Case 5 (Already-complete query): PASS")
+
+    # 6. Unsupported Query
+    with patch.object(ChatGroq, 'invoke', side_effect=mock_success):
+        res6 = run_query("test_unsupported_p14", "What is the capital of France?")
+        assert res6.get("grounded") == False, "Unsupported query must trigger Fast-Trip"
+        print("  -> Case 6 (Unsupported query Fast-Trip): PASS")
+
+    # 7. Same Standalone Query Across Two Sessions (Cache Valid)
+    s_stand1 = "session_standalone_1"
+    s_stand2 = "session_standalone_2"
+    reset_session(s_stand1)
+    reset_session(s_stand2)
+    with patch.object(ChatGroq, 'invoke', side_effect=mock_success):
+        r_stand1 = run_query(s_stand1, "What is fine-tuning?")
+        r_stand2 = run_query(s_stand2, "What is fine-tuning?")
+        assert r_stand2.get("cache_hit") == True, "Standalone queries across sessions MUST continue using semantic cache"
+        print("  -> Case 7 (Standalone query cross-session cache): PASS")
+
+    # 8. Same Contextual Query Text With Different Session Subjects (Cache Bypassed / No Cross-Contamination)
+    s_a = "session_a"
+    s_b = "session_b"
+    reset_session(s_a)
+    reset_session(s_b)
+    with patch.object(ChatGroq, 'invoke', side_effect=mock_success):
+        run_query(s_a, "What is fine-tuning?")
+        run_query(s_b, "What is artificial intelligence?")
+        res_a = run_query(s_a, "Why is it useful?")
+        res_b = run_query(s_b, "Why is it useful?")
+        assert "fine-tuning" in res_a.get("resolved_query", "").lower()
+        assert "artificial intelligence" in res_b.get("resolved_query", "").lower()
+        assert res_a.get("cache_hit") == False, "Contextual query in session A must bypass cache"
+        assert res_b.get("cache_hit") == False, "Contextual query in session B must bypass cache"
+        print("  -> Case 8 (Contextual query cache isolation & no cross-contamination): PASS")
+
+    # 9. Same Contextual Query Within Same Session (Evaluated dynamically)
+    with patch.object(ChatGroq, 'invoke', side_effect=mock_success):
+        res_a_again = run_query(s_a, "Why is it useful?")
+        assert res_a_again.get("cache_hit") == False, "Contextual queries within same session must bypass cache"
+        print("  -> Case 9 (Same contextual query intra-session bypass): PASS")
+
+    # 10. New Chat Isolation
+    reset_session(s_a)
+    with patch.object(ChatGroq, 'invoke', side_effect=mock_success):
+        res_reset = run_query(s_a, "Why is it useful?")
+        assert "fine-tuning" not in res_reset.get("resolved_query", "").lower(), "After reset, session history must be clear"
+        print("  -> Case 10 (New Chat isolation): PASS")
+
+    # 11. Measured Query Resolution Latencies
+    t_standalone_ms = t1 * 1000.0
+    t_contextual_ms = t2 * 1000.0
+    print(f"  -> Case 11 (Measured resolution latencies: Standalone={t_standalone_ms:.4f} ms, Contextual={t_contextual_ms:.4f} ms): PASS")
+
+    qr_metrics = metrics.get('query_resolution', {})
+    print(f"  -> Case 12 (Query resolution telemetry in /metrics): {qr_metrics}")
+
+    print("\n# ALL PHASE 14 CONTEXTUAL RESOLUTION & CACHE ISOLATION TESTS SUCCEEDED!")
+
 if __name__ == "__main__":
     print("--- PHASE 10 CACHE TESTS ---")
     
@@ -166,12 +259,12 @@ if __name__ == "__main__":
         res_pronoun = run_query(s1, "What is its purpose?")
         assert res_pronoun.get('cache_hit') == False, "New intent must cache miss"
 
-        # TEST 4.1 - Re-run same pronoun in DIFFERENT chat (Should hit cache globally because resolved query is same!)
-        print("\n# TEST 4.1: Same pronoun query in new context")
+        # TEST 4.1 - Re-run same pronoun in DIFFERENT chat (Contextual queries bypass global cache for isolation)
+        print("\n# TEST 4.1: Contextual query in new session (Global Cache Bypass)")
         s1_alt = "test_s1_alt"
         run_query(s1_alt, "What is fine-tuning?")
         res_pronoun_again = run_query(s1_alt, "What is its purpose?")
-        assert res_pronoun_again.get('cache_hit') == True, "Resolved query is identical, cache across sessions safely!"
+        assert res_pronoun_again.get('cache_hit') == False, "Contextual queries must BYPASS global semantic cache to prevent cross-session contamination"
         
         # TEST 5 - Unsupported
         print("\n# TEST 5: Unsupported query")
@@ -235,4 +328,5 @@ if __name__ == "__main__":
     assert gen_metrics.get('fallback_failure_count') >= 1, "Ultimate failure bounds must record"
 
     test_citation_verification(metrics)
+    test_contextual_query_resolution(metrics)
 
